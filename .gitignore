@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+stamp_images/
+output/
+.kiro/
+.vscode/

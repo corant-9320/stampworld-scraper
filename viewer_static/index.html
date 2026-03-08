@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stamp Collection Viewer</title>
+<style>
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --muted: #888; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+  header { background: var(--accent); padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.4rem; font-weight: 600; }
+  header .stats { margin-left: auto; font-size: 0.85rem; color: #aac; }
+  nav { display: flex; gap: 0; border-bottom: 2px solid var(--accent); flex-wrap: wrap; }
+  nav button { background: none; border: none; color: var(--muted); padding: 0.75rem 1.5rem; cursor: pointer; font-size: 0.95rem; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+  nav button.active { color: var(--text); border-bottom-color: var(--highlight); }
+  nav button:hover { color: var(--text); }
+  .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+
+  .region-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .region-tab { background: var(--card); border: 1px solid var(--accent); border-radius: 20px; padding: 0.35rem 1rem; cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+  .region-tab.active { background: var(--accent); color: var(--text); border-color: var(--highlight); }
+  .region-tab:hover { color: var(--text); }
+
+  .country-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+  .country-card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+  .country-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+  .country-card h3 { font-size: 1rem; margin-bottom: 0.4rem; }
+  .country-card .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+  .country-card.scraped { border-left: 3px solid #4ade80; }
+  .country-card.remaining { border-left: 3px solid #444; opacity: 0.6; cursor: default; }
+  .country-card.remaining:hover { transform: none; box-shadow: none; opacity: 0.75; }
+  .country-card.remaining a { color: #7aa2f7; text-decoration: none; font-size: 0.8rem; }
+  .country-card.remaining a:hover { color: var(--highlight); }
+
+  .section-title { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .back-btn { background: var(--accent); border: none; color: var(--text); padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; margin-bottom: 1rem; font-size: 0.9rem; }
+  .back-btn:hover { background: var(--highlight); }
+  .country-header { margin-bottom: 1.5rem; }
+  .country-header h2 { font-size: 1.5rem; }
+  .country-header .info { font-size: 0.85rem; color: var(--muted); margin-top: 0.3rem; }
+  .search-bar { width: 100%; padding: 0.6rem 1rem; background: var(--card); border: 1px solid var(--accent); border-radius: 6px; color: var(--text); font-size: 0.9rem; margin-bottom: 1rem; }
+  .search-bar::placeholder { color: var(--muted); }
+  .search-bar:focus { outline: none; border-color: var(--highlight); }
+  .result-count { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+
+  .stamp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+  .stamp-card { background: var(--card); border-radius: 8px; overflow: hidden; transition: transform 0.15s; }
+  .stamp-card:hover { transform: translateY(-2px); }
+  .stamp-card img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; padding: 8px; }
+  .stamp-card .no-img { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #2a2a3e; color: var(--muted); font-size: 0.8rem; }
+  .stamp-card .info { padding: 0.6rem; }
+  .stamp-card .info h4 { font-size: 0.85rem; margin-bottom: 0.2rem; }
+  .stamp-card .info p { font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+  .stamp-card .group-title { font-size: 0.7rem; color: #7aa2f7; margin-top: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .group-header { font-size: 0.85rem; font-weight: 600; color: #7aa2f7; padding: 0.6rem 0 0.4rem; margin: 1.5rem 0 0.75rem; border-bottom: 1px solid var(--accent); }
+  .attr-table { width: 100%; border-collapse: collapse; margin-top: 0.3rem; }
+  .attr-table td { font-size: 0.72rem; padding: 0.1rem 0; vertical-align: top; }
+  .attr-label { color: var(--muted); width: 52%; padding-right: 0.3rem; }
+  .attr-val { color: var(--text); }
+
+  .loading { text-align: center; padding: 3rem; color: var(--muted); }
+  .progress-bar { height: 4px; background: var(--card); border-radius: 2px; margin-top: 0.4rem; }
+  .progress-fill { height: 100%; background: #4ade80; border-radius: 2px; transition: width 0.3s; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔍 Stamp Collection Viewer</h1>
+  <div class="stats" id="header-stats">Loading...</div>
+</header>
+<nav>
+  <button class="active" onclick="showMainTab('overview')">Scraped</button>
+  <button onclick="showMainTab('remaining')">Remaining</button>
+</nav>
+<div class="container">
+  <div id="overview-tab"></div>
+  <div id="remaining-tab" style="display:none"></div>
+  <div id="country-tab" style="display:none"></div>
+</div>
+<script>
+let overviewData = null;
+let currentCountryStamps = null;
+let currentRegion = null;
+let activeMainTab = 'overview';
+
+async function init() {
+  document.getElementById('overview-tab').innerHTML = '<div class="loading">Loading...</div>';
+  const res = await fetch('/api/overview');
+  overviewData = await res.json();
+
+  // Compute totals
+  let totalStamps = 0, totalImages = 0, totalScraped = 0, totalRemaining = 0;
+  for (const region of Object.values(overviewData)) {
+    totalScraped += region.scraped.length;
+    totalRemaining += region.remaining.length;
+    for (const c of region.scraped) { totalStamps += c.total_stamps; totalImages += c.total_images; }
+  }
+  document.getElementById('header-stats').textContent =
+    `${totalScraped} countries · ${totalStamps.toLocaleString()} stamps · ${totalImages.toLocaleString()} images · ${totalRemaining} remaining`;
+
+  const regions = Object.keys(overviewData);
+  currentRegion = regions.includes('Europe') ? 'Europe' : regions[0];
+  renderOverview();
+  renderRemaining();
+}
+
+function regionTabs(activeTab) {
+  const regions = Object.keys(overviewData);
+  return '<div class="region-tabs">' +
+    regions.map(r => `<div class="region-tab ${r === currentRegion ? 'active' : ''}" onclick="switchRegion('${r}','${activeTab}')">${r}</div>`).join('') +
+    '</div>';
+}
+
+function switchRegion(region, tab) {
+  currentRegion = region;
+  if (tab === 'overview') renderOverview();
+  else renderRemaining();
+}
+
+function renderOverview() {
+  const el = document.getElementById('overview-tab');
+  const data = overviewData[currentRegion];
+  let html = regionTabs('overview');
+
+  if (!data.scraped.length) {
+    html += '<div class="loading">No scraped data for this region yet.</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  html += `<div class="section-title">${data.scraped.length} scraped · ${data.remaining.length} remaining in ${currentRegion}</div>`;
+  html += '<div class="country-grid">';
+  for (const c of data.scraped) {
+    const pct = c.total_stamps > 0 ? Math.round(c.total_images / c.total_stamps * 100) : 0;
+    html += `<div class="country-card scraped" onclick="loadCountry('${c.slug}', '${c.name}')">
+      <h3>${c.name}</h3>
+      <div class="meta">${c.total_stamps.toLocaleString()} stamps · ${c.total_images.toLocaleString()} images</div>
+      <div class="meta">${c.pages_scraped ? c.pages_scraped + ' pages' : ''}</div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+    </div>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderRemaining() {
+  const el = document.getElementById('remaining-tab');
+  const data = overviewData[currentRegion];
+  let html = regionTabs('remaining');
+  html += `<div class="section-title">${data.remaining.length} countries still to scrape in ${currentRegion}</div>`;
+  html += '<div class="country-grid">';
+  for (const c of data.remaining) {
+    html += `<div class="country-card remaining">
+      <h3>${c.name}</h3>
+      <div class="meta"><a href="${c.sw_url}" target="_blank">View on StampWorld ↗</a></div>
+    </div>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function showMainTab(tab) {
+  activeMainTab = tab;
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('overview-tab').style.display = 'none';
+  document.getElementById('remaining-tab').style.display = 'none';
+  document.getElementById('country-tab').style.display = 'none';
+  if (tab === 'overview') {
+    document.getElementById('overview-tab').style.display = '';
+    document.querySelectorAll('nav button')[0].classList.add('active');
+  } else if (tab === 'remaining') {
+    document.getElementById('remaining-tab').style.display = '';
+    document.querySelectorAll('nav button')[1].classList.add('active');
+  } else if (tab === 'country') {
+    document.getElementById('country-tab').style.display = '';
+  }
+}
+
+async function loadCountry(slug, name) {
+  showMainTab('country');
+  const el = document.getElementById('country-tab');
+  el.innerHTML = '<div class="loading">Loading ' + name + '...</div>';
+  const res = await fetch('/api/country/' + slug);
+  const data = await res.json();
+  currentCountryStamps = data.stamps || [];
+  const meta = data.metadata || {};
+
+  let html = `<button class="back-btn" onclick="showMainTab('overview')">← Back</button>`;
+  html += `<div class="country-header"><h2>${name}</h2>`;
+  html += `<div class="info">${currentCountryStamps.length.toLocaleString()} stamps`;
+  if (meta.total_pages) html += ` · ${meta.total_pages} pages`;
+  if (meta.scraped_at) html += ` · scraped ${new Date(meta.scraped_at).toLocaleDateString()}`;
+  html += `</div></div>`;
+  html += `<input class="search-bar" type="text" placeholder="Search by number, type, colour, denomination, group title..." oninput="filterStamps(this.value)">`;
+  html += `<div id="result-count" class="result-count">${currentCountryStamps.length.toLocaleString()} stamps</div>`;
+  html += `<div id="stamp-groups">`;
+  html += renderStampGroups(currentCountryStamps);
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// Fields to display on each card, in order, with labels
+const STAMP_FIELDS = [
+  ['denomination', 'Denom.'],
+  ['catalogue_type', 'Type'],
+  ['colour', 'Colour'],
+  ['perforations', 'Perf.'],
+  ['watermark', 'Watermark'],
+  ['paper', 'Paper'],
+  ['quantity', 'Qty'],
+  ['price_mint_nh', 'Mint NH'],
+  ['price_unused', 'Unused'],
+  ['price_used', 'Used'],
+  ['price_on_cover', 'On Cover'],
+  ['currency', 'Currency'],
+];
+
+function renderStampGroups(stamps) {
+  // Build fallback maps keyed by group_id
+  // typeFallback: { group_id: { exactType: local_image } } — for prefix matching in getFallbackImage
+  // groupFallback: { group_id: first_local_image } — last resort
+  const typeFallback = {};
+  const groupFallback = {};
+  for (const s of currentCountryStamps) {
+    if (!s.local_image || !s.group_id) continue;
+    if (!groupFallback[s.group_id]) groupFallback[s.group_id] = s.local_image;
+    const type = s.type || '';
+    if (type) {
+      if (!typeFallback[s.group_id]) typeFallback[s.group_id] = {};
+      if (!typeFallback[s.group_id][type]) typeFallback[s.group_id][type] = s.local_image;
+    }
+  }
+
+  function getFallbackImage(s) {
+    if (s.local_image) return { img: s.local_image, isFallback: false };
+    if (!s.group_id) return { img: null, isFallback: false };
+    const gid = s.group_id;
+    const type = s.type || '';
+    // Decrement trailing number to find nearest type with an image
+    // e.g. CU10 -> CU9 -> CU8 -> ... -> CU1 -> CU
+    if (type && typeFallback[gid]) {
+      const m = type.match(/^(.*?)(\d+)$/);
+      if (m) {
+        const prefix = m[1];
+        let num = parseInt(m[2], 10);
+        while (num > 0) {
+          num--;
+          const candidate = num === 0 ? prefix : prefix + num;
+          if (typeFallback[gid][candidate]) return { img: typeFallback[gid][candidate], isFallback: true };
+        }
+      }
+    }
+    // Last resort: any image in group
+    return { img: groupFallback[gid] || null, isFallback: !!groupFallback[gid] };
+  }
+
+  // Group stamps by group_title (or group_id if no title)
+  const groups = [];
+  const groupMap = new Map();
+  for (const s of stamps) {
+    const key = s.group_title || s.group_id || '';
+    if (!groupMap.has(key)) {
+      groupMap.set(key, []);
+      groups.push(key);
+    }
+    groupMap.get(key).push(s);
+  }
+
+  let html = '';
+  for (const key of groups) {
+    const groupStamps = groupMap.get(key);
+    if (key) {
+      html += `<div class="group-header">${key}</div>`;
+    }
+    html += '<div class="stamp-grid">';
+    for (const s of groupStamps) {
+      const { img: localImg, isFallback } = getFallbackImage(s);
+      const imgSrc = localImg
+        ? '/images/' + localImg.replace(/\\/g, '/').replace('stamp_images/', '')
+        : '';
+      const img = imgSrc
+        ? `<img src="${imgSrc}" alt="Stamp ${s.number}" loading="lazy" ${isFallback ? 'style="opacity:0.5"' : ''}>`
+        : `<div class="no-img">No image</div>`;
+
+      // Build attribute rows — only show populated fields
+      let attrs = '';
+      for (const [field, label] of STAMP_FIELDS) {
+        const val = s[field];
+        if (val && val !== '-') {
+          attrs += `<tr><td class="attr-label">${label}</td><td class="attr-val">${val}</td></tr>`;
+        }
+      }
+
+      html += `<div class="stamp-card">
+        ${img}
+        <div class="info">
+          <h4>#${s.number || '?'} &nbsp;·&nbsp; ${s.type || ''}</h4>
+          ${attrs ? `<table class="attr-table">${attrs}</table>` : ''}
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function filterStamps(query) {
+  if (!currentCountryStamps) return;
+  const q = query.toLowerCase();
+  const filtered = q ? currentCountryStamps.filter(s =>
+    (s.number || '').toLowerCase().includes(q) ||
+    (s.type || '').toLowerCase().includes(q) ||
+    (s.colour || '').toLowerCase().includes(q) ||
+    (s.denomination || '').toLowerCase().includes(q) ||
+    (s.watermark || '').toLowerCase().includes(q) ||
+    (s.group_title || '').toLowerCase().includes(q)
+  ) : currentCountryStamps;
+  document.getElementById('result-count').textContent = filtered.length.toLocaleString() + ' stamps';
+  document.getElementById('stamp-groups').innerHTML = renderStampGroups(filtered);
+}
+
+init();
+</script>
+</body>
+</html>
