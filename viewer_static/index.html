@@ -55,7 +55,14 @@
   .stamp-card .info p { font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
   .stamp-card .group-title { font-size: 0.7rem; color: #7aa2f7; margin-top: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .group-header { font-size: 0.85rem; font-weight: 600; color: #7aa2f7; padding: 0.6rem 0 0.4rem; margin: 1.5rem 0 0.75rem; border-bottom: 1px solid var(--accent); }
+  .group-header { font-size: 0.85rem; font-weight: 600; color: #7aa2f7; padding: 0.6rem 0 0.4rem; margin: 1.5rem 0 0.75rem; border-bottom: 1px solid var(--accent); display: flex; align-items: center; justify-content: space-between; }
+  .rescrape-btn { font-size: 0.72rem; padding: 0.2rem 0.6rem; background: #1a1b2e; border: 1px solid var(--accent); color: #7aa2f7; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .rescrape-btn:hover { background: var(--accent); color: #fff; }
+  .rescrape-btn:disabled { opacity: 0.5; cursor: wait; }
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; padding: 0.7rem 1.2rem; border-radius: 6px; font-size: 0.85rem; z-index: 9999; display: none; }
+  .toast.info { background: #1a1b2e; border: 1px solid #7aa2f7; color: #7aa2f7; }
+  .toast.ok   { background: #1a2e1a; border: 1px solid #4caf50; color: #4caf50; }
+  .toast.err  { background: #2e1a1a; border: 1px solid #f44336; color: #f44336; }
   .attr-table { width: 100%; border-collapse: collapse; margin-top: 0.3rem; }
   .attr-table td { font-size: 0.72rem; padding: 0.1rem 0; vertical-align: top; }
   .attr-label { color: var(--muted); width: 52%; padding-right: 0.3rem; }
@@ -64,6 +71,11 @@
   .loading { text-align: center; padding: 3rem; color: var(--muted); }
   .progress-bar { height: 4px; background: var(--card); border-radius: 2px; margin-top: 0.4rem; }
   .progress-fill { height: 100%; background: #4ade80; border-radius: 2px; transition: width 0.3s; }
+  
+  /* Match UI specific */
+  code { background: var(--accent); padding: 0.1rem 0.3rem; border-radius: 3px; font-family: monospace; font-size: 0.85em; }
+  select { background: var(--card); border: 1px solid var(--accent); color: var(--text); padding: 0.4rem 0.8rem; border-radius: 4px; font-size: 0.85rem; }
+  select:focus { outline: none; border-color: var(--highlight); }
 </style>
 </head>
 <body>
@@ -74,15 +86,19 @@
 <nav>
   <button class="active" onclick="showMainTab('overview')">Scraped</button>
   <button onclick="showMainTab('remaining')">Remaining</button>
+  <button onclick="showMainTab('match')">Match Stamp</button>
 </nav>
 <div class="container">
   <div id="overview-tab"></div>
   <div id="remaining-tab" style="display:none"></div>
   <div id="country-tab" style="display:none"></div>
+  <div id="match-tab" style="display:none"></div>
 </div>
 <script>
 let overviewData = null;
 let currentCountryStamps = null;
+let currentCountrySlug = null;
+let currentCountryName = null;
 let currentRegion = null;
 let activeMainTab = 'overview';
 
@@ -168,6 +184,7 @@ function showMainTab(tab) {
   document.getElementById('overview-tab').style.display = 'none';
   document.getElementById('remaining-tab').style.display = 'none';
   document.getElementById('country-tab').style.display = 'none';
+  document.getElementById('match-tab').style.display = 'none';
   if (tab === 'overview') {
     document.getElementById('overview-tab').style.display = '';
     document.querySelectorAll('nav button')[0].classList.add('active');
@@ -176,6 +193,10 @@ function showMainTab(tab) {
     document.querySelectorAll('nav button')[1].classList.add('active');
   } else if (tab === 'country') {
     document.getElementById('country-tab').style.display = '';
+  } else if (tab === 'match') {
+    document.getElementById('match-tab').style.display = '';
+    document.querySelectorAll('nav button')[2].classList.add('active');
+    loadMatchTab();
   }
 }
 
@@ -186,6 +207,8 @@ async function loadCountry(slug, name) {
   const res = await fetch('/api/country/' + slug);
   const data = await res.json();
   currentCountryStamps = data.stamps || [];
+  currentCountrySlug = slug;
+  currentCountryName = name;
   const meta = data.metadata || {};
 
   let html = `<button class="back-btn" onclick="showMainTab('overview')">← Back</button>`;
@@ -272,8 +295,13 @@ function renderStampGroups(stamps) {
   let html = '';
   for (const key of groups) {
     const groupStamps = groupMap.get(key);
+    const gid = groupStamps[0]?.group_id || '';
+    const country = groupStamps[0]?.country || '';
     if (key) {
-      html += `<div class="group-header">${key}</div>`;
+      html += `<div class="group-header" id="group-${gid}">
+        ${key}
+        <button class="rescrape-btn" onclick="rescrapeGroup('${country}','${gid}',this)" title="Re-scrape this group">↺ Rescrape</button>
+      </div>`;
     }
     html += '<div class="stamp-grid">';
     for (const s of groupStamps) {
@@ -307,6 +335,51 @@ function renderStampGroups(stamps) {
   return html;
 }
 
+async function rescrapeGroup(country, groupId, btn) {
+  btn.disabled = true;
+  btn.textContent = '↺ Scraping...';
+  showToast(`Rescraping group ${groupId}…`, 'info');
+  try {
+    const res = await fetch('/api/rescrape-group', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({country, group_id: groupId})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`Group ${groupId} rescrape done. Reloading…`, 'ok');
+      setTimeout(() => {
+        loadCountry(currentCountrySlug, currentCountryName).then(() => {
+          const el = document.getElementById('group-' + groupId);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }, 1500);
+    } else {
+      showToast(`Error: ${data.error}`, 'err');
+      btn.disabled = false;
+      btn.textContent = '↺ Rescrape';
+    }
+  } catch (e) {
+    showToast(`Request failed: ${e}`, 'err');
+    btn.disabled = false;
+    btn.textContent = '↺ Rescrape';
+  }
+}
+
+function showToast(msg, type) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.className = 'toast ' + type;
+  toast.style.display = 'block';
+  clearTimeout(toast._t);
+  if (type !== 'info') toast._t = setTimeout(() => toast.style.display = 'none', 4000);
+}
+
 function filterStamps(query) {
   if (!currentCountryStamps) return;
   const q = query.toLowerCase();
@@ -320,6 +393,390 @@ function filterStamps(query) {
   ) : currentCountryStamps;
   document.getElementById('result-count').textContent = filtered.length.toLocaleString() + ' stamps';
   document.getElementById('stamp-groups').innerHTML = renderStampGroups(filtered);
+}
+
+// Match Stamp tab functions
+let matchIndexStatus = null;
+let matchCountries = [];
+
+async function loadMatchTab() {
+  const el = document.getElementById('match-tab');
+  el.innerHTML = '<div class="loading">Loading match interface...</div>';
+  
+  try {
+    // Load index status
+    const statusRes = await fetch('/api/match/index-status');
+    if (!statusRes.ok) {
+      el.innerHTML = `
+        <div class="country-header">
+          <h2>Match Stamp</h2>
+          <div class="info">Upload a photo of a stamp to find matches in the database</div>
+        </div>
+        <div class="loading" style="color: #f44336;">
+          Index not built. Run <code>python build_index.py</code> first.
+        </div>
+      `;
+      return;
+    }
+    
+    matchIndexStatus = await statusRes.json();
+    matchCountries = matchIndexStatus.countries || [];
+    
+    // Render match UI
+    el.innerHTML = renderMatchUI();
+    
+  } catch (e) {
+    el.innerHTML = `
+      <div class="country-header">
+        <h2>Match Stamp</h2>
+        <div class="info">Upload a photo of a stamp to find matches in the database</div>
+      </div>
+      <div class="loading" style="color: #f44336;">
+        Error loading match interface: ${e.message}
+      </div>
+    `;
+  }
+}
+
+function renderMatchUI() {
+  const indexInfo = matchIndexStatus ? 
+    `${matchIndexStatus.total_images.toLocaleString()} images indexed · ${matchIndexStatus.total_descriptors.toLocaleString()} descriptors` :
+    'Index not built';
+  
+  const builtAt = matchIndexStatus?.built_at ? 
+    new Date(matchIndexStatus.built_at).toLocaleDateString() : 'Unknown';
+  
+  let html = `
+    <div class="country-header">
+      <h2>Match Stamp</h2>
+      <div class="info">Upload a photo of a stamp to find matches in the database</div>
+    </div>
+    
+    <div style="background: var(--card); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem;">
+      <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem;">Index Status</div>
+      <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
+        <div>
+          <div style="font-size: 0.9rem;">${indexInfo}</div>
+          <div style="font-size: 0.75rem; color: var(--muted);">Built: ${builtAt}</div>
+        </div>
+        <div>
+          <div style="font-size: 0.9rem;">${matchCountries.length} countries</div>
+          <div style="font-size: 0.75rem; color: var(--muted);">Filter by country below</div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="match-upload-area" style="background: var(--card); border: 2px dashed var(--accent); border-radius: 8px; padding: 2rem; text-align: center; margin-bottom: 1.5rem; cursor: pointer;">
+      <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">📷</div>
+      <div style="font-size: 1rem; margin-bottom: 0.5rem;">Drag & drop a stamp photo here</div>
+      <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 1rem;">or click to select a file (JPEG/PNG, max 10MB)</div>
+      <input type="file" id="match-file-input" accept=".jpg,.jpeg,.png" style="display: none;">
+      <button id="match-select-btn" style="background: var(--accent); border: none; color: var(--text); padding: 0.5rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem;">Select File</button>
+    </div>
+    
+    <div id="match-preview" style="display: none; margin-bottom: 1.5rem;">
+      <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem;">Preview</div>
+      <div style="display: flex; gap: 1rem; align-items: flex-start;">
+        <img id="match-preview-img" style="max-width: 200px; max-height: 200px; border-radius: 4px; background: #fff; padding: 4px;">
+        <div style="flex: 1;">
+          <div style="font-size: 0.9rem; margin-bottom: 0.5rem;" id="match-file-info"></div>
+          <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+            <div>
+              <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 0.2rem;">Country filter (optional)</div>
+              <select id="match-country-select" style="background: var(--card); border: 1px solid var(--accent); color: var(--text); padding: 0.4rem 0.8rem; border-radius: 4px; font-size: 0.85rem;">
+                <option value="">All countries</option>
+                ${matchCountries.map(c => `<option value="${c}">${c}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <div style="font-size: 0.85rem; color: var(--muted); margin-bottom: 0.2rem;">Max results</div>
+              <select id="match-top-k" style="background: var(--card); border: 1px solid var(--accent); color: var(--text); padding: 0.4rem 0.8rem; border-radius: 4px; font-size: 0.85rem;">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+              </select>
+            </div>
+            <div style="margin-top: 1.2rem;">
+              <button id="match-submit-btn" style="background: var(--highlight); border: none; color: var(--text); padding: 0.5rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem; font-weight: 500;">Find Matches</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="match-results" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div style="font-size: 0.85rem; color: var(--muted);" id="match-results-info"></div>
+        <button id="match-clear-btn" style="background: none; border: 1px solid var(--accent); color: var(--muted); padding: 0.3rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem;">Clear Results</button>
+      </div>
+      <div id="match-ocr-panel" style="display:none"></div>
+      <div id="match-results-grid" class="stamp-grid"></div>
+    </div>
+    
+    <div id="match-loading" style="display: none; text-align: center; padding: 2rem;">
+      <div style="font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem;">Matching stamp...</div>
+      <div style="font-size: 0.8rem; color: var(--muted);">Extracting features and searching database</div>
+    </div>
+  `;
+  
+  // Add event listeners after DOM is updated
+  setTimeout(() => {
+    setupMatchEventListeners();
+  }, 10);
+  
+  return html;
+}
+
+function setupMatchEventListeners() {
+  const uploadArea = document.getElementById('match-upload-area');
+  const fileInput = document.getElementById('match-file-input');
+  const selectBtn = document.getElementById('match-select-btn');
+  const preview = document.getElementById('match-preview');
+  const previewImg = document.getElementById('match-preview-img');
+  const fileInfo = document.getElementById('match-file-info');
+  const submitBtn = document.getElementById('match-submit-btn');
+  const results = document.getElementById('match-results');
+  const resultsInfo = document.getElementById('match-results-info');
+  const resultsGrid = document.getElementById('match-results-grid');
+  const clearBtn = document.getElementById('match-clear-btn');
+  const loading = document.getElementById('match-loading');
+  
+  // File selection
+  selectBtn.addEventListener('click', (e) => { e.stopPropagation(); fileInput.click(); });
+  uploadArea.addEventListener('click', (e) => { if (e.target === fileInput) return; fileInput.click(); });
+  
+  // Drag and drop
+  uploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadArea.style.borderColor = 'var(--highlight)';
+    uploadArea.style.backgroundColor = 'rgba(15, 52, 96, 0.2)';
+  });
+  
+  uploadArea.addEventListener('dragleave', () => {
+    uploadArea.style.borderColor = 'var(--accent)';
+    uploadArea.style.backgroundColor = '';
+  });
+  
+  uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.style.borderColor = 'var(--accent)';
+    uploadArea.style.backgroundColor = '';
+    
+    if (e.dataTransfer.files.length > 0) {
+      handleFileSelect(e.dataTransfer.files[0]);
+    }
+  });
+  
+  // File input change
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+      handleFileSelect(e.target.files[0]);
+    }
+  });
+  
+  function handleFileSelect(file) {
+    // Validate file
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+    if (!allowedTypes.includes(file.type)) {
+      showToast('Please select a JPEG or PNG image', 'err');
+      return;
+    }
+    
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('File too large (max 10MB)', 'err');
+      return;
+    }
+    
+    // Show preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      previewImg.src = e.target.result;
+      fileInfo.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+      preview.style.display = 'block';
+      uploadArea.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+  }
+  
+  // Submit match
+  submitBtn.addEventListener('click', async () => {
+    if (!fileInput.files.length) {
+      showToast('Please select an image first', 'err');
+      return;
+    }
+    
+    const file = fileInput.files[0];
+    const country = document.getElementById('match-country-select').value;
+    const topK = parseInt(document.getElementById('match-top-k').value);
+    
+    // Show loading, hide results
+    loading.style.display = 'block';
+    preview.style.display = 'none';
+    results.style.display = 'none';
+    
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      if (country) formData.append('country', country);
+      formData.append('top_k', topK);
+      
+      const res = await fetch('/api/match', {
+        method: 'POST',
+        body: formData
+      });
+      
+      const data = await res.json();
+      
+      // Hide loading
+      loading.style.display = 'none';
+      
+      if (res.ok) {
+        if (data.error) {
+          // Error but HTTP 200 (e.g., no features)
+          showToast(data.error, 'err');
+          preview.style.display = 'block';
+          return;
+        }
+        
+        // Show results
+        displayMatchResults(data);
+        
+      } else {
+        // HTTP error
+        showToast(data.error || 'Match failed', 'err');
+        preview.style.display = 'block';
+      }
+      
+    } catch (e) {
+      loading.style.display = 'none';
+      preview.style.display = 'block';
+      showToast(`Request failed: ${e.message}`, 'err');
+    }
+  });
+  
+  // Clear results
+  clearBtn.addEventListener('click', () => {
+    results.style.display = 'none';
+    preview.style.display = 'block';
+    uploadArea.style.display = 'block';
+    fileInput.value = '';
+  });
+  
+  function displayMatchResults(data) {
+    const matches = data.matches || [];
+    const elapsedMs = data.elapsed_ms || 0;
+    
+    if (matches.length === 0) {
+      resultsInfo.textContent = 'No matches found';
+      resultsGrid.innerHTML = '<div class="loading">No matching stamps found</div>';
+    } else {
+      const ocrText = data.ocr_text || '';
+      const detectedCountry = matches[0]?.detected_country || '';
+      
+      let infoHtml = `${matches.length} match${matches.length === 1 ? '' : 'es'} found · ${elapsedMs}ms`;
+      resultsInfo.innerHTML = infoHtml;
+
+      
+      // Build results: uploaded image pinned on left + match cards
+      let ocrInfoHtml = '';
+      if (ocrText) {
+        ocrInfoHtml += `<div style="font-size: 0.72rem; margin-top: 0.3rem;"><span style="color: var(--muted);">OCR:</span> <span style="color: #a78bfa;">${ocrText}</span></div>`;
+      }
+      if (detectedCountry) {
+        ocrInfoHtml += `<div style="font-size: 0.72rem; margin-top: 0.15rem;"><span style="color: var(--muted);">Country:</span> <span style="color: #34d399;">${detectedCountry}</span></div>`;
+      }
+
+      let gridHtml = `
+        <div class="stamp-card" style="border: 2px solid var(--highlight); position: relative;">
+          <div style="position: absolute; top: 6px; left: 6px; background: var(--highlight); color: #fff; font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 3px; z-index: 1;">YOUR STAMP</div>
+          <img src="${previewImg.src}" alt="Uploaded stamp" style="width:100%; aspect-ratio:1; object-fit:contain; background:#fff; padding:8px;">
+          <div class="info">
+            <h4 style="font-size: 0.85rem;">Uploaded image</h4>
+            <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">${fileInfo.textContent}</div>
+            ${ocrInfoHtml}
+          </div>
+        </div>
+      `;
+
+      for (const match of matches) {
+        const imgSrc = match.local_image
+          ? '/images/' + match.local_image.replace(/\\/g, '/').replace('stamp_images/', '')
+          : '';
+        
+        const confidencePct = Math.round(match.confidence * 100);
+        const confidenceColor = confidencePct >= 80 ? '#4ade80' : 
+                               confidencePct >= 50 ? '#fbbf24' : 
+                               '#f87171';
+
+        // Build metadata rows
+        const metaFields = [
+          ['Colour', match.colour],
+          ['Denom.', match.denomination],
+          ['Mint NH', match.price_mint_nh],
+          ['Unused', match.price_unused],
+          ['Used', match.price_used],
+          ['On Cover', match.price_on_cover],
+          ['Perf.', match.perforations],
+          ['Watermark', match.watermark],
+        ];
+        let metaHtml = '';
+        for (const [label, val] of metaFields) {
+          if (val && val !== '-') {
+            metaHtml += `<tr><td class="attr-label">${label}</td><td class="attr-val">${val}</td></tr>`;
+          }
+        }
+
+        // Score breakdown mini-bars
+        const scores = [
+          ['CNN',     match.score_cnn,     '#60a5fa'],
+          ['Colour',  match.score_color,   '#f59e0b'],
+          ['Text',    match.score_text,    '#a78bfa'],
+          ['Country', match.score_country, '#34d399'],
+        ];
+        let scoreBars = '<div style="margin-top: 0.4rem;">';
+        for (const [label, val, color] of scores) {
+          const pct = Math.round(Math.max(0, Math.min(1, val)) * 100);
+          scoreBars += `<div style="display:flex;align-items:center;gap:0.3rem;margin-bottom:2px;">
+            <span style="font-size:0.6rem;color:var(--muted);width:42px;text-align:right;">${label}</span>
+            <div style="flex:1;height:3px;background:var(--bg);border-radius:1px;overflow:hidden;">
+              <div style="width:${pct}%;height:100%;background:${color};"></div>
+            </div>
+            <span style="font-size:0.6rem;color:var(--muted);width:26px;">${pct}%</span>
+          </div>`;
+        }
+        scoreBars += '</div>';
+        
+        gridHtml += `
+          <div class="stamp-card">
+            ${imgSrc ? `<img src="${imgSrc}" alt="Stamp ${match.number}" loading="lazy">` : '<div class="no-img">No image</div>'}
+            <div class="info">
+              <h4>#${match.number} · ${match.country}</h4>
+              <div style="display: flex; align-items: center; margin: 0.3rem 0;">
+                <div style="width: 100%; height: 4px; background: var(--card); border-radius: 2px; overflow: hidden;">
+                  <div style="width: ${confidencePct}%; height: 100%; background: ${confidenceColor};"></div>
+                </div>
+                <div style="margin-left: 0.5rem; font-size: 0.75rem; color: ${confidenceColor}; font-weight: 500;">
+                  ${confidencePct}%
+                </div>
+              </div>
+              ${scoreBars}
+              <div class="group-title" style="white-space: normal;">${match.group_title}</div>
+              ${metaHtml ? `<table class="attr-table" style="margin-top: 0.4rem;">${metaHtml}</table>` : ''}
+            </div>
+          </div>
+        `;
+      }
+      
+      resultsGrid.innerHTML = gridHtml;
+
+      // OCR info is now shown under the uploaded image card, hide the old panel
+      const ocrPanel = document.getElementById('match-ocr-panel');
+      ocrPanel.style.display = 'none';
+    }
+    
+    results.style.display = 'block';
+  }
 }
 
 init();
