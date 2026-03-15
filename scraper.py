@@ -23,6 +23,9 @@ import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
+from territories import TERRITORIES
+from config import SCRAPER_DELAY, SCRAPER_MAX_RETRIES, BROWSER_RESTART_EVERY
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -34,469 +37,9 @@ logging.basicConfig(
 log = logging.getLogger("stampworld")
 
 # ---------------------------------------------------------------------------
-# Country registry — add new countries here
+# Country registry — imported from territories.py
 # ---------------------------------------------------------------------------
-COUNTRIES = {
-    "Malta": {
-        "collection_path": "/en/stamps/Malta/Postage%20stamps/1860-2026",
-        "year_range": "1860-2026",
-    },
-    "Great-Britain": {
-        "collection_path": "/en/stamps/Great-Britain/Postage%20stamps/1840-2026",
-        "year_range": "1840-2026",
-    },
-    "Netherlands": {
-        "collection_path": "/en/stamps/Netherlands/Postage%20stamps/1852-2027",
-        "year_range": "1852-2027",
-    },
-    "France": {
-        "collection_path": "/en/stamps/France/Postage%20stamps/1849-2026",
-        "year_range": "1849-2026",
-    },
-    "Germany": {
-        "collection_path": "/en/stamps/Germany/Postage%20stamps/1949-2026",
-        "year_range": "1949-2026",
-    },
-    "Belgium": {
-        "collection_path": "/en/stamps/Belgium/Postage%20stamps/1849-2026",
-        "year_range": "1849-2026",
-    },
-    "Austria": {
-        "collection_path": "/en/stamps/Austria/Postage%20stamps/1850-2026",
-        "year_range": "1850-2026",
-    },
-    "Switzerland": {
-        "collection_path": "/en/stamps/Switzerland/Postage%20stamps/1849-2026",
-        "year_range": "1849-2026",
-    },
-    "Italy": {
-        "collection_path": "/en/stamps/Italy/Postage%20stamps/1861-2026",
-        "year_range": "1861-2026",
-    },
-    "Spain": {
-        "collection_path": "/en/stamps/Spain/Postage%20stamps/1850-2026",
-        "year_range": "1850-2026",
-    },
-    "Portugal": {
-        "collection_path": "/en/stamps/Portugal/Postage%20stamps/1853-2026",
-        "year_range": "1853-2026",
-    },
-    "Sweden": {
-        "collection_path": "/en/stamps/Sweden/Postage%20stamps/1855-2025",
-        "year_range": "1855-2025",
-    },
-    "Norway": {
-        "collection_path": "/en/stamps/Norway/Postage%20stamps/1855-2026",
-        "year_range": "1855-2026",
-    },
-    "Denmark": {
-        "collection_path": "/en/stamps/Denmark/Postage%20stamps/1851-2025",
-        "year_range": "1851-2025",
-    },
-    "Finland": {
-        "collection_path": "/en/stamps/Finland/Postage%20stamps/1856-2026",
-        "year_range": "1856-2026",
-    },
-    "Poland": {
-        "collection_path": "/en/stamps/Poland/Postage%20stamps/1860-2026",
-        "year_range": "1860-2026",
-    },
-    "Czech-Republic": {
-        "collection_path": "/en/stamps/Czech-Republic/Postage%20stamps/1993-2026",
-        "year_range": "1993-2026",
-    },
-    "Hungary": {
-        "collection_path": "/en/stamps/Hungary/Postage%20stamps/1871-2026",
-        "year_range": "1871-2026",
-    },
-    "Romania": {
-        "collection_path": "/en/stamps/Romania/Postage%20stamps/1858-2026",
-        "year_range": "1858-2026",
-    },
-    "Bulgaria": {
-        "collection_path": "/en/stamps/Bulgaria/Postage%20stamps/1879-2025",
-        "year_range": "1879-2025",
-    },
-    "Greece": {
-        "collection_path": "/en/stamps/Greece/Postage%20stamps/1861-2026",
-        "year_range": "1861-2026",
-    },
-    "Turkey": {
-        "collection_path": "/en/stamps/Turkey/Postage%20stamps/1863-2026",
-        "year_range": "1863-2026",
-    },
-    "Russia": {
-        "collection_path": "/en/stamps/Russia/Postage%20stamps/1857-2026",
-        "year_range": "1857-2026",
-    },
-    "Ukraine": {
-        "collection_path": "/en/stamps/Ukraine/Postage%20stamps/1918-2026",
-        "year_range": "1918-2026",
-    },
-    "Ireland": {
-        "collection_path": "/en/stamps/Ireland/Postage%20stamps/1922-2026",
-        "year_range": "1922-2026",
-    },
-    "Luxembourg": {
-        "collection_path": "/en/stamps/Luxembourg/Postage%20stamps/1852-2026",
-        "year_range": "1852-2026",
-    },
-    "Monaco": {
-        "collection_path": "/en/stamps/Monaco/Postage%20stamps/1885-2026",
-        "year_range": "1885-2026",
-    },
-    "Liechtenstein": {
-        "collection_path": "/en/stamps/Liechtenstein/Postage%20stamps/1912-2026",
-        "year_range": "1912-2026",
-    },
-    "Iceland": {
-        "collection_path": "/en/stamps/Iceland/Postage%20stamps/1873-2023",
-        "year_range": "1873-2023",
-    },
-    "Croatia": {
-        "collection_path": "/en/stamps/Croatia/Postage%20stamps/1941-2026",
-        "year_range": "1941-2026",
-    },
-    "Slovenia": {
-        "collection_path": "/en/stamps/Slovenia/Postage%20stamps/1991-2026",
-        "year_range": "1991-2026",
-    },
-    "Slovakia": {
-        "collection_path": "/en/stamps/Slovakia/Postage%20stamps/1939-2026",
-        "year_range": "1939-2026",
-    },
-    "Serbia": {
-        "collection_path": "/en/stamps/Serbia/Postage%20stamps/1866-2026",
-        "year_range": "1866-2026",
-    },
-    "Montenegro": {
-        "collection_path": "/en/stamps/Montenegro/Postage%20stamps/1874-2026",
-        "year_range": "1874-2026",
-    },
-    "Albania": {
-        "collection_path": "/en/stamps/Albania/Postage%20stamps/1913-2025",
-        "year_range": "1913-2025",
-    },
-    "Kosovo": {
-        "collection_path": "/en/stamps/Kosovo/Postage%20stamps/2000-2025",
-        "year_range": "2000-2025",
-    },
-    "Moldova": {
-        "collection_path": "/en/stamps/Moldova/Postage%20stamps/1991-2026",
-        "year_range": "1991-2026",
-    },
-    "Belarus": {
-        "collection_path": "/en/stamps/Belarus/Postage%20stamps/1992-2026",
-        "year_range": "1992-2026",
-    },
-    "Latvia": {
-        "collection_path": "/en/stamps/Latvia/Postage%20stamps/1918-2026",
-        "year_range": "1918-2026",
-    },
-    "Lithuania": {
-        "collection_path": "/en/stamps/Lithuania/Postage%20stamps/1918-2026",
-        "year_range": "1918-2026",
-    },
-    "Estonia": {
-        "collection_path": "/en/stamps/Estonia/Postage%20stamps/1918-2026",
-        "year_range": "1918-2026",
-    },
-    "Vatican-City": {
-        "collection_path": "/en/stamps/Vatican-City/Postage%20stamps/1929-2025",
-        "year_range": "1929-2025",
-    },
-    "San-Marino": {
-        "collection_path": "/en/stamps/San-Marino/Postage%20stamps/1877-2026",
-        "year_range": "1877-2026",
-    },
-    "DDR": {
-        "collection_path": "/en/stamps/DDR/Postage%20stamps/1949-1990",
-        "year_range": "1949-1990",
-    },
-    "USSR": {
-        "collection_path": "/en/stamps/USSR/Postage%20stamps/1923-1991",
-        "year_range": "1923-1991",
-    },
-    "Czechoslovakia": {
-        "collection_path": "/en/stamps/Czechoslovakia/Postage%20stamps/1918-1992",
-        "year_range": "1918-1992",
-    },
-    "Yugoslavia": {
-        "collection_path": "/en/stamps/Yugoslavia/Postage%20stamps/1918-2006",
-        "year_range": "1918-2006",
-    },
-    "Saar": {
-        "collection_path": "/en/stamps/Saar/Postage%20stamps/1950-1956",
-        "year_range": "1950-1956",
-    },
-    "Aaland": {
-        "collection_path": "/en/stamps/Aaland/Postage%20stamps/1984-2026",
-        "year_range": "1984-2026",
-    },
-    "Faroe-Islands": {
-        "collection_path": "/en/stamps/Faroe-Islands/Postage%20stamps/1975-2026",
-        "year_range": "1975-2026",
-    },
-    "Greenland": {
-        "collection_path": "/en/stamps/Greenland/Postage%20stamps/1938-2026",
-        "year_range": "1938-2026",
-    },
-    "Gibraltar": {
-        "collection_path": "/en/stamps/Gibraltar/Postage%20stamps/1886-2025",
-        "year_range": "1886-2025",
-    },
-    "United-States": {
-        "collection_path": "/en/stamps/United-States/Postage%20stamps/1847-2026",
-        "year_range": "1847-2026",
-    },
-    # --- North & Central America + Caribbean ---
-    "Anguilla": {
-        "collection_path": "/en/stamps/Anguilla/Postage%20stamps/1967-2016",
-        "year_range": "1967-2016",
-    },
-    "Antigua-And-Barbuda": {
-        "collection_path": "/en/stamps/Antigua-And-Barbuda/Postage%20stamps/1981-2024",
-        "year_range": "1981-2024",
-    },
-    "Aruba": {
-        "collection_path": "/en/stamps/Aruba/Postage%20stamps/1986-2024",
-        "year_range": "1986-2024",
-    },
-    "Bahamas": {
-        "collection_path": "/en/stamps/Bahamas/Postage%20stamps/1859-2025",
-        "year_range": "1859-2025",
-    },
-    "Barbados": {
-        "collection_path": "/en/stamps/Barbados/Postage%20stamps/1852-2024",
-        "year_range": "1852-2024",
-    },
-    "Belize": {
-        "collection_path": "/en/stamps/Belize/Postage%20stamps/1973-2021",
-        "year_range": "1973-2021",
-    },
-    "Bermuda": {
-        "collection_path": "/en/stamps/Bermuda/Postage%20stamps/1848-2025",
-        "year_range": "1848-2025",
-    },
-    "British-Virgin-Islands": {
-        "collection_path": "/en/stamps/British-Virgin-Islands/Postage%20stamps/1866-2023",
-        "year_range": "1866-2023",
-    },
-    "Canada": {
-        "collection_path": "/en/stamps/Canada/Postage%20stamps/1868-2026",
-        "year_range": "1868-2026",
-    },
-    "Cayman-Islands": {
-        "collection_path": "/en/stamps/Cayman-Islands/Postage%20stamps/1901-2024",
-        "year_range": "1901-2024",
-    },
-    "Costa-Rica": {
-        "collection_path": "/en/stamps/Costa-Rica/Postage%20stamps/1863-2025",
-        "year_range": "1863-2025",
-    },
-    "Cuba": {
-        "collection_path": "/en/stamps/Cuba/Postage%20stamps/1899-2022",
-        "year_range": "1899-2022",
-    },
-    "Curacao": {
-        "collection_path": "/en/stamps/Curacao/Postage%20stamps/1873-2025",
-        "year_range": "1873-2025",
-    },
-    "Danish-West-Indies": {
-        "collection_path": "/en/stamps/Danish-West-Indies/Postage%20stamps/1856-1915",
-        "year_range": "1856-1915",
-    },
-    "Dominica": {
-        "collection_path": "/en/stamps/Dominica/Postage%20stamps/1874-2024",
-        "year_range": "1874-2024",
-    },
-    "Dominican-Republic": {
-        "collection_path": "/en/stamps/Dominican-Republic/Postage%20stamps/1865-2025",
-        "year_range": "1865-2025",
-    },
-    "El-Salvador": {
-        "collection_path": "/en/stamps/El-Salvador/Postage%20stamps/1867-2024",
-        "year_range": "1867-2024",
-    },
-    "Grenada": {
-        "collection_path": "/en/stamps/Grenada/Postage%20stamps/1861-2024",
-        "year_range": "1861-2024",
-    },
-    "Grenada-Grenadines": {
-        "collection_path": "/en/stamps/Grenada-Grenadines/Postage%20stamps/1973-2021",
-        "year_range": "1973-2021",
-    },
-    "Guadeloupe": {
-        "collection_path": "/en/stamps/Guadeloupe/Postage%20stamps/1884-1947",
-        "year_range": "1884-1947",
-    },
-    "Guatemala": {
-        "collection_path": "/en/stamps/Guatemala/Postage%20stamps/1871-2026",
-        "year_range": "1871-2026",
-    },
-    "Haiti": {
-        "collection_path": "/en/stamps/Haiti/Postage%20stamps/1881-2010",
-        "year_range": "1881-2010",
-    },
-    "Honduras": {
-        "collection_path": "/en/stamps/Honduras/Postage%20stamps/1866-2025",
-        "year_range": "1866-2025",
-    },
-    "Jamaica": {
-        "collection_path": "/en/stamps/Jamaica/Postage%20stamps/1860-2025",
-        "year_range": "1860-2025",
-    },
-    "Leeward-Islands": {
-        "collection_path": "/en/stamps/Leeward-Islands/Postage%20stamps/1890-1954",
-        "year_range": "1890-1954",
-    },
-    "Martinique": {
-        "collection_path": "/en/stamps/Martinique/Postage%20stamps/1886-1947",
-        "year_range": "1886-1947",
-    },
-    "Mexico": {
-        "collection_path": "/en/stamps/Mexico/Postage%20stamps/1856-2025",
-        "year_range": "1856-2025",
-    },
-    "Montserrat": {
-        "collection_path": "/en/stamps/Montserrat/Postage%20stamps/1876-2019",
-        "year_range": "1876-2019",
-    },
-    "Netherlands-Antilles": {
-        "collection_path": "/en/stamps/Netherlands-Antilles/Postage%20stamps/1949-2010",
-        "year_range": "1949-2010",
-    },
-    "Netherlands-Caribbean": {
-        "collection_path": "/en/stamps/Netherlands-Caribbean/Postage%20stamps/2010-2012",
-        "year_range": "2010-2012",
-    },
-    "Nevis": {
-        "collection_path": "/en/stamps/Nevis/Postage%20stamps/1980-2024",
-        "year_range": "1980-2024",
-    },
-    "Nicaragua": {
-        "collection_path": "/en/stamps/Nicaragua/Postage%20stamps/1862-2021",
-        "year_range": "1862-2021",
-    },
-    "Panama": {
-        "collection_path": "/en/stamps/Panama/Postage%20stamps/1878-2024",
-        "year_range": "1878-2024",
-    },
-    "Puerto-Rico": {
-        "collection_path": "/en/stamps/Puerto-Rico/Postage%20stamps/1873-1900",
-        "year_range": "1873-1900",
-    },
-    "Sint-Maartin": {
-        "collection_path": "/en/stamps/Sint-Maartin/Postage%20stamps/2010-2025",
-        "year_range": "2010-2025",
-    },
-    "St.-Kitts": {
-        "collection_path": "/en/stamps/St.-Kitts/Postage%20stamps/1980-2024",
-        "year_range": "1980-2024",
-    },
-    "St.-Lucia": {
-        "collection_path": "/en/stamps/St.-Lucia/Postage%20stamps/1860-2024",
-        "year_range": "1860-2024",
-    },
-    "St.-Pierre-et-Miquelon": {
-        "collection_path": "/en/stamps/St.-Pierre-et-Miquelon/Postage%20stamps/1885-2026",
-        "year_range": "1885-2026",
-    },
-    "St.-Vincent-And-The-Grenadines": {
-        "collection_path": "/en/stamps/St.-Vincent-And-The-Grenadines/Postage%20stamps/1993-2024",
-        "year_range": "1993-2024",
-    },
-    "Trinidad-And-Tobago": {
-        "collection_path": "/en/stamps/Trinidad-And-Tobago/Postage%20stamps/1913-2022",
-        "year_range": "1913-2022",
-    },
-    "Turks-And-Caicos-Islands": {
-        "collection_path": "/en/stamps/Turks-And-Caicos-Islands/Postage%20stamps/1900-2022",
-        "year_range": "1900-2022",
-    },
-    "UN-New-York": {
-        "collection_path": "/en/stamps/UN-New-York/Postage%20stamps/1951-2026",
-        "year_range": "1951-2026",
-    },
-    # --- US territories / sub-issues ---
-    "Canal-Zone": {
-        "collection_path": "/en/stamps/Canal-Zone/Postage%20stamps/1904-1978",
-        "year_range": "1904-1978",
-    },
-    "U.S.-Post-China": {
-        "collection_path": "/en/stamps/U.S.-Post-China/Postage%20stamps/1919-1922",
-        "year_range": "1919-1922",
-    },
-    "Guam": {
-        "collection_path": "/en/stamps/Guam/Postage%20stamps/1899-1930",
-        "year_range": "1899-1930",
-    },
-    "Mariana-Islands": {
-        "collection_path": "/en/stamps/Mariana-Islands/Postage%20stamps/1899-1899",
-        "year_range": "1899-1899",
-    },
-    "U.S.-Cuba": {
-        "collection_path": "/en/stamps/U.S.-Cuba/Postage%20stamps/1898-1899",
-        "year_range": "1898-1899",
-    },
-    "Hawaii": {
-        "collection_path": "/en/stamps/Hawaii/Postage%20stamps/1851-1899",
-        "year_range": "1851-1899",
-    },
-    "Confederate-States": {
-        "collection_path": "/en/stamps/Confederate-States/Postage%20stamps/1861-1863",
-        "year_range": "1861-1863",
-    },
-    # --- France & French territories ---
-    "Andorra-FR": {
-        "collection_path": "/en/stamps/Andorra-FR/Postage%20stamps/1931-2026",
-        "year_range": "1931-2026",
-    },
-    "French-Oceania": {
-        "collection_path": "/en/stamps/French-Oceania/Postage%20stamps/1892-1956",
-        "year_range": "1892-1956",
-    },
-    "French-Polynesia": {
-        "collection_path": "/en/stamps/French-Polynesia/Postage%20stamps/1958-2026",
-        "year_range": "1958-2026",
-    },
-    "French-South-and-Antarctic-Terr.": {
-        "collection_path": "/en/stamps/French-South-and-Antarctic-Terr./Postage%20stamps/1955-2026",
-        "year_range": "1955-2026",
-    },
-    "Mayotte": {
-        "collection_path": "/en/stamps/Mayotte/Postage%20stamps/1892-2011",
-        "year_range": "1892-2011",
-    },
-    "New-Caledonia": {
-        "collection_path": "/en/stamps/New-Caledonia/Postage%20stamps/1860-2025",
-        "year_range": "1860-2025",
-    },
-    "Wallis-and-Futuna-Islands": {
-        "collection_path": "/en/stamps/Wallis-and-Futuna-Islands/Postage%20stamps/1920-2025",
-        "year_range": "1920-2025",
-    },
-    "Conseil-de-LEurope": {
-        "collection_path": "/en/stamps/Conseil-de-LEurope/Postage%20stamps/1958-2019",
-        "year_range": "1958-2019",
-    },
-    "UNESCO": {
-        "collection_path": "/en/stamps/UNESCO/Postage%20stamps/1961-2019",
-        "year_range": "1961-2019",
-    },
-    "Castellorizo": {
-        "collection_path": "/en/stamps/Castellorizo/Postage%20stamps/1920-1920",
-        "year_range": "1920-1920",
-    },
-    "Rouad,-Ile": {
-        "collection_path": "/en/stamps/Rouad,-Ile/Postage%20stamps/1916-1916",
-        "year_range": "1916-1916",
-    },
-    "French-Committee-of-National-Liberation": {
-        "collection_path": "/en/stamps/French-Committee-of-National-Liberation/Postage%20stamps/1943-1944",
-        "year_range": "1943-1944",
-    },
-}
+# TERRITORIES contains all country/territory data with collection paths
 
 # ---------------------------------------------------------------------------
 # Config
@@ -505,8 +48,7 @@ BASE_URL = "https://www.stampworld.com"
 USER_ID = os.environ.get("STAMPWORLD_USER_ID", "694157")
 IMAGES_ROOT = "stamp_images"
 OUTPUT_ROOT = "output"
-DELAY_SECONDS = 1.5
-MAX_RETRIES = 3
+# SCRAPER_DELAY, SCRAPER_MAX_RETRIES, and BROWSER_RESTART_EVERY are imported from config.py
 RETRY_BACKOFF = 2
 
 
@@ -533,16 +75,43 @@ def atomic_json_write(path: str, data) -> None:
 
 
 def paths_for_country(country: str):
-    slug = country.replace(" ", "_").replace("-", "_")
+    """Return file paths for a given country slug.
+
+    Args:
+        country: StampWorld slug (e.g., "Great-Britain", "Malta")
+
+    Returns:
+        tuple: (output_file, progress_file, images_dir)
+    """
+    # Validate country exists in TERRITORIES
+    if country not in TERRITORIES:
+        raise KeyError(f"Unknown country '{country}'. Available: {list(TERRITORIES.keys())}")
+
+    # Get territory data (though we don't need collection_path/year_range here)
+    territory = TERRITORIES[country]
+
+    # Convert slug to filename-safe version:
+    # - Keep hyphens as-is (actual files have hyphens, not underscores)
+    # - Convert to lowercase
+    # - Note: Some special cases like "St.-Pierre-et-Miquelon" become "st._pierre_et_miquelon"
+    #   but that's handled by the existing replace("-", "_") logic for slugs with periods
+    filename_slug = country.lower()
+
+    # Special handling for slugs with periods (like "St.-Pierre-et-Miquelon")
+    # These should have hyphens converted to underscores in filenames
+    if "." in country:
+        filename_slug = filename_slug.replace("-", "_")
+
     images_dir = os.path.join(IMAGES_ROOT, country)
-    output_file = os.path.join(OUTPUT_ROOT, f"stamps_{slug.lower()}.json")
-    progress_file = os.path.join(OUTPUT_ROOT, f"progress_{slug.lower()}.json")
+    output_file = os.path.join(OUTPUT_ROOT, f"stamps_{filename_slug}.json")
+    progress_file = os.path.join(OUTPUT_ROOT, f"progress_{filename_slug}.json")
     os.makedirs(images_dir, exist_ok=True)
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
     return output_file, progress_file, images_dir
 
 
-def download_image(url: str, filepath: str, retries: int = MAX_RETRIES):
+
+def download_image(url: str, filepath: str, retries: int = SCRAPER_MAX_RETRIES):
     for attempt in range(1, retries + 1):
         try:
             r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -858,11 +427,11 @@ def build_output(country, stamps, pages_scraped):
 # ---------------------------------------------------------------------------
 
 def scrape_country(country, reset=False, max_pages=None):
-    if country not in COUNTRIES:
-        log.error("Unknown country '%s'. Available: %s", country, list(COUNTRIES.keys()))
+    if country not in TERRITORIES:
+        log.error("Unknown country '%s'. Available: %s", country, list(TERRITORIES.keys()))
         return
 
-    config = COUNTRIES[country]
+    config = TERRITORIES[country]
     output_file, progress_file, images_dir = paths_for_country(country)
 
     if reset:
@@ -875,7 +444,7 @@ def scrape_country(country, reset=False, max_pages=None):
     log.info("=== StampWorld Scraper v2 — %s ===", country)
 
     pages_done = 0
-    BROWSER_RESTART_EVERY = 20  # fresh browser every N pages to avoid memory/session rot
+    # BROWSER_RESTART_EVERY is imported from config.py
 
     with sync_playwright() as p:
         browser = None
@@ -919,7 +488,7 @@ def scrape_country(country, reset=False, max_pages=None):
             log.info("Page %d: %s", current_page, url)
 
             loaded = False
-            for attempt in range(1, MAX_RETRIES + 1):
+            for attempt in range(1, SCRAPER_MAX_RETRIES + 1):
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     page.wait_for_selector("tr.stamp_tr", timeout=15000)
@@ -928,15 +497,15 @@ def scrape_country(country, reset=False, max_pages=None):
                 except Exception as e:
                     wait = RETRY_BACKOFF ** attempt
                     log.warning("Page %d load fail (%d/%d): %s — retry in %ds",
-                                current_page, attempt, MAX_RETRIES, e, wait)
+                                current_page, attempt, SCRAPER_MAX_RETRIES, e, wait)
                     time.sleep(wait)
                     # On last retry, try a fresh browser
-                    if attempt == MAX_RETRIES - 1:
+                    if attempt == SCRAPER_MAX_RETRIES - 1:
                         log.info("Restarting browser before final retry.")
                         page = fresh_browser()
 
             if not loaded:
-                log.error("Page %d: failed after %d attempts, stopping.", current_page, MAX_RETRIES)
+                log.error("Page %d: failed after %d attempts, stopping.", current_page, SCRAPER_MAX_RETRIES)
                 break
 
             time.sleep(1)
@@ -951,7 +520,7 @@ def scrape_country(country, reset=False, max_pages=None):
                     break
                 log.warning("Empty page %d, trying next.", current_page)
                 current_page += 1
-                time.sleep(DELAY_SECONDS)
+                time.sleep(SCRAPER_DELAY)
                 continue
             consecutive_empty = 0
 
@@ -995,7 +564,7 @@ def scrape_country(country, reset=False, max_pages=None):
                 log.info("No next page — done.")
                 break
             current_page = next_pg
-            time.sleep(DELAY_SECONDS)
+            time.sleep(SCRAPER_DELAY)
 
         if browser:
             browser.close()
@@ -1007,16 +576,56 @@ def scrape_country(country, reset=False, max_pages=None):
 
 
 # ---------------------------------------------------------------------------
+# Delta scraping: only scrape missing stamps between available and scraped
+# ---------------------------------------------------------------------------
+
+def scrape_delta(country):
+    """
+    Compare available count (from territories.py) with scraped count.
+    If available > scraped, continue scraping from where we left off.
+    """
+    if country not in TERRITORIES:
+        log.error("Unknown country '%s'", country)
+        return
+
+    config = TERRITORIES[country]
+    available = config.get("available", 0)
+    
+    output_file, progress_file, images_dir = paths_for_country(country)
+    
+    if not os.path.exists(output_file):
+        log.info("No existing data for %s, doing full scrape instead", country)
+        scrape_country(country)
+        return
+    
+    with open(output_file, encoding="utf-8") as f:
+        data = json.load(f)
+    
+    scraped = len(data.get("stamps", []))
+    
+    if scraped >= available:
+        log.info("Already have %d/%d stamps for %s", scraped, available, country)
+        return
+    
+    delta = available - scraped
+    log.info("Delta scrape for %s: have %d, need %d more (delta: %d)", 
+             country, scraped, available, delta)
+    
+    # Continue scraping from where we left off
+    scrape_country(country, reset=False)
+
+
+# ---------------------------------------------------------------------------
 # Rescrape a single group
 # ---------------------------------------------------------------------------
 
 def rescrape_group(country, group_id):
     """Re-fetch the page containing group_id, update only those stamps in the JSON."""
-    if country not in COUNTRIES:
+    if country not in TERRITORIES:
         log.error("Unknown country '%s'", country)
         return
 
-    config = COUNTRIES[country]
+    config = TERRITORIES[country]
     output_file, progress_file, images_dir = paths_for_country(country)
 
     if not os.path.exists(output_file):
@@ -1122,9 +731,13 @@ def main():
                         help="Stop after N pages (for testing)")
     parser.add_argument("--rescrape-group", type=str, default=None,
                         help="Rescrape a single group_id and update JSON in place")
+    parser.add_argument("--delta", action="store_true",
+                        help="Only scrape missing stamps (available - scraped)")
     args = parser.parse_args()
     if args.rescrape_group:
         rescrape_group(args.country, args.rescrape_group)
+    elif args.delta:
+        scrape_delta(args.country)
     else:
         scrape_country(args.country, reset=args.reset, max_pages=args.max_pages)
 

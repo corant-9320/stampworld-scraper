@@ -9,13 +9,15 @@ histogram/hash approaches for visual similarity.
 import os
 import json
 import numpy as np
-from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
+
+from matcher.base_index import BaseIndex, IndexRecord
+from config import CNN_FLOOR, CNN_CEIL, SIGNAL_WEIGHTS, CONFIDENCE_SIGMOID_SCALE, CONFIDENCE_SIGMOID_CENTER, HSV_BINS
 
 
 # ---------------------------------------------------------------------------
@@ -136,19 +138,7 @@ def compute_embedding_from_bytes(image_bytes: bytes) -> Optional[np.ndarray]:
 # Index
 # ---------------------------------------------------------------------------
 
-@dataclass
-class IndexRecord:
-    idx: int
-    image_id: str
-    country: str
-    sw_id: str
-    number: str
-    group_title: str
-    local_image: str
-    detail_url: str
-
-
-class CNNIndex:
+class CNNIndex(BaseIndex):
     """Pre-computed CNN embedding index for all reference images."""
 
     def __init__(self):
@@ -180,6 +170,7 @@ class CNNIndex:
                     "group_title": r.group_title,
                     "local_image": r.local_image,
                     "detail_url": r.detail_url,
+                    "ocr_text": r.ocr_text,
                 }
                 for r in self.records
             ],
@@ -205,29 +196,25 @@ class CNNIndex:
                 group_title=img["group_title"],
                 local_image=img["local_image"],
                 detail_url=img["detail_url"],
+                ocr_text=img.get("ocr_text", ""),
             ))
         return idx
 
     def __len__(self):
         return len(self.records)
 
-    def query(self, embedding: np.ndarray, top_k: int = 10,
-              country: str = None,
-              color_hist: np.ndarray = None,
-              ocr_text: str = None,
-              stamp_metadata: dict = None,
-              w_cnn: float = 0.40, w_color: float = 0.35,
-              w_text: float = 0.10, w_country: float = 0.15) -> List[dict]:
+    def _query_internal(self, embedding: np.ndarray, top_k: int = 10,
+                        country: str = None,
+                        color_hist: np.ndarray = None,
+                        query_aspect: float = None,
+                        w_cnn: float = 0.55,
+                        w_color: float = 0.35,
+                        w_aspect: float = 0.10) -> List[dict]:
         """
-        Find top-K most similar images, re-ranked with multiple signals:
-
-        - CNN cosine similarity: design/structure matching (50%)
-        - HSV histogram correlation: colour discrimination (25%)
-        - OCR text vs scraped denomination/colour: text matching (10%)
-        - OCR country identification: country boost (15%)
+        Find top-K most similar images, re-ranked with CNN + color + aspect signals.
+        OCR signals removed — stamp typography is too complex for local OCR engines.
         """
         import cv2
-        from matcher.stamp_text_countries import find_country_from_text
 
         q = embedding.reshape(1, -1)  # (1, 512)
 
@@ -240,31 +227,12 @@ class CNNIndex:
             mask = np.array([r.country.lower() != cl for r in self.records])
             cnn_scores[mask] = -999.0
 
-        # Get a wider shortlist for re-ranking (5x top_k)
+        # Prepare shortlist for re-ranking
         shortlist_k = min(top_k * 5, len(cnn_scores))
         if len(cnn_scores) > shortlist_k:
             shortlist_idx = np.argpartition(cnn_scores, -shortlist_k)[-shortlist_k:]
         else:
             shortlist_idx = np.arange(len(cnn_scores))
-
-        # Prepare OCR tokens for denomination matching
-        ocr_tokens = set()
-        if ocr_text:
-            ocr_tokens = set(ocr_text.lower().split())
-
-        # Identify country from OCR text
-        ocr_countries = {}
-        if ocr_text:
-            for c, conf in find_country_from_text(ocr_text):
-                ocr_countries[c.lower()] = min(conf, 1.0)
-
-        # Re-rank shortlist
-        # CNN cosine sims for stamps cluster in ~0.75-0.95 because all stamps
-        # share borders/frames/text. Rescale to the useful range so the CNN
-        # weight actually discriminates between good and bad design matches.
-        # floor=0.75 → 0%, ceiling=0.95 → 100%
-        CNN_FLOOR = 0.75
-        CNN_CEIL = 0.95
 
         final_scores = np.full(len(cnn_scores), -999.0)
         _breakdown = {}
@@ -272,52 +240,42 @@ class CNNIndex:
             if cnn_scores[i] < -900:
                 continue
 
-            # Rescale CNN to useful range
+            # Rescale CNN to useful range (stamps cluster in ~0.75-0.95)
             cnn_rescaled = np.clip(
                 (cnn_scores[i] - CNN_FLOOR) / (CNN_CEIL - CNN_FLOOR), 0.0, 1.0)
             score = w_cnn * cnn_rescaled
 
-            # Track individual scores for display
             _hist_sim = 0.0
-            _text_sim = 0.0
-            _country_sim = 0.0
+            _quad_sims = [0.0, 0.0, 0.0, 0.0]
+            _aspect_sim = 0.0
 
-            # Colour histogram re-ranking
-            # Use Bhattacharyya distance (0 = identical, 1 = no overlap)
-            # converted to similarity. CORREL was wrong here — it measures
-            # linear correlation of bin patterns, not actual colour overlap,
-            # so brown and blue could score similarly if their S/V
-            # distributions had similar shapes.
+            # Aspect ratio similarity
+            if query_aspect is not None:
+                ref_aspect = self._get_aspect_ratio(self.records[i].local_image)
+                if ref_aspect is not None:
+                    ratio_diff = abs(query_aspect - ref_aspect) / max(query_aspect, ref_aspect)
+                    _aspect_sim = max(0.0, 1.0 - ratio_diff * 2.0)
+                score += w_aspect * _aspect_sim
+
+            # Colour histogram re-ranking (quadrant-based)
             if color_hist is not None:
                 r = self.records[i]
                 ref_hist = self._get_color_hist(r.local_image)
                 if ref_hist is not None:
-                    bhatt_dist = float(cv2.compareHist(
-                        color_hist, ref_hist, cv2.HISTCMP_BHATTACHARYYA))
-                    _hist_sim = 1.0 - bhatt_dist  # 1 = identical, 0 = no overlap
+                    qsize = len(color_hist) // 4
+                    quad_sims = []
+                    for qi in range(4):
+                        s = qi * qsize
+                        e = s + qsize
+                        bhatt = float(cv2.compareHist(
+                            color_hist[s:e], ref_hist[s:e], cv2.HISTCMP_BHATTACHARYYA))
+                        quad_sims.append(1.0 - bhatt)
+                    _hist_sim = sum(quad_sims) / 4.0
+                    _quad_sims = quad_sims
                 score += w_color * _hist_sim
 
-            # OCR text matching against scraped denomination/colour
-            if ocr_tokens and stamp_metadata:
-                img_key = self.records[i].local_image.replace("\\", "/")
-                meta = stamp_metadata.get(img_key, {})
-                denom = (meta.get("denomination") or "").lower()
-                colour = (meta.get("colour") or "").lower()
-                ref_text = f"{denom} {colour}"
-                ref_tokens = set(ref_text.split())
-                if ref_tokens:
-                    overlap = len(ocr_tokens & ref_tokens)
-                    _text_sim = overlap / max(len(ocr_tokens | ref_tokens), 1)
-                score += w_text * _text_sim
-
-            # Country identification boost from OCR
-            if ocr_countries:
-                rec_country = self.records[i].country.lower()
-                _country_sim = ocr_countries.get(rec_country, 0.0)
-                score += w_country * _country_sim
-
             final_scores[i] = score
-            _breakdown[i] = (cnn_rescaled, _hist_sim, _text_sim, _country_sim)
+            _breakdown[i] = (cnn_rescaled, _hist_sim, _aspect_sim, _quad_sims)
 
         # Top-K from final scores
         if len(final_scores) > top_k:
@@ -328,22 +286,11 @@ class CNNIndex:
 
         valid_idx = [i for i in top_idx if final_scores[i] > -900]
 
-        # Include detected country in results
-        detected_country = list(ocr_countries.keys())[0] if ocr_countries else ""
-
-        # Confidence: use the raw combined score directly.
-        # The theoretical max is 1.0 (all signals perfect).
-        # Scale so that a combined score of ~0.7 maps to ~90% confidence,
-        # and scores below ~0.3 feel appropriately low.
         results = []
         for i in valid_idx:
             r = self.records[i]
             raw = final_scores[i]
-            # Absolute confidence: raw score is already 0-1 range
-            # (weighted sum of similarities each in [0,1]).
-            # Apply a mild sigmoid to spread the useful range.
-            confidence = 1.0 / (1.0 + np.exp(-12 * (raw - 0.45)))
-            bd = _breakdown.get(i, (0, 0, 0, 0))
+            bd = _breakdown.get(i, (0, 0, 0, [0, 0, 0, 0]))
             results.append({
                 "image_id": r.image_id,
                 "country": r.country,
@@ -352,21 +299,54 @@ class CNNIndex:
                 "group_title": r.group_title,
                 "local_image": r.local_image,
                 "detail_url": r.detail_url,
-                "confidence": float(np.clip(confidence, 0, 1)),
+                "confidence": float(np.clip(raw, 0, 1)),
                 "cosine_sim": float(cnn_scores[i]),
-                "detected_country": detected_country,
                 "score_cnn": float(bd[0]),
                 "score_color": float(bd[1]),
-                "score_text": float(bd[2]),
-                "score_country": float(bd[3]),
+                "score_aspect": float(bd[2]),
+                "score_color_tl": float(bd[3][0]),
+                "score_color_tr": float(bd[3][1]),
+                "score_color_bl": float(bd[3][2]),
+                "score_color_br": float(bd[3][3]),
             })
         return results
 
 
     @staticmethod
+    def _get_aspect_ratio(img_path: str) -> Optional[float]:
+        """Return width/height ratio for an image."""
+        from PIL import Image as PILImage
+        try:
+            with PILImage.open(img_path) as img:
+                w, h = img.size
+                return w / h if h > 0 else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _compute_quadrant_hist(hsv_img, bins=HSV_BINS):
+        """Compute concatenated HSV histograms for 4 quadrants of an image."""
+        import cv2
+        h, w = hsv_img.shape[:2]
+        mid_h, mid_w = h // 2, w // 2
+        quadrants = [
+            hsv_img[:mid_h, :mid_w],    # top-left
+            hsv_img[:mid_h, mid_w:],    # top-right
+            hsv_img[mid_h:, :mid_w],    # bottom-left
+            hsv_img[mid_h:, mid_w:],    # bottom-right
+        ]
+        parts = []
+        for q in quadrants:
+            hist = cv2.calcHist([q], [0, 1, 2], None, list(bins),
+                                [0, 180, 0, 256, 0, 256])
+            cv2.normalize(hist, hist)
+            parts.append(hist.flatten().astype(np.float32))
+        return np.concatenate(parts)
+
+    @staticmethod
     def _get_color_hist(img_path: str,
-                        bins: tuple = (36, 12, 12)) -> Optional[np.ndarray]:
-        """Compute normalised HSV histogram for a reference image."""
+                        bins: tuple = HSV_BINS) -> Optional[np.ndarray]:
+        """Compute normalised quadrant HSV histograms for a reference image."""
         import cv2
         try:
             img = cv2.imread(img_path, cv2.IMREAD_COLOR)
@@ -378,9 +358,58 @@ class CNNIndex:
                 img = cv2.resize(img, (int(w * scale), int(h * scale)),
                                  interpolation=cv2.INTER_AREA)
             hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            hist = cv2.calcHist([hsv], [0, 1, 2], None, list(bins),
-                                [0, 180, 0, 256, 0, 256])
-            cv2.normalize(hist, hist)
-            return hist.flatten().astype(np.float32)
+            return CNNIndex._compute_quadrant_hist(hsv, bins)
         except Exception:
             return None
+
+    @staticmethod
+    def _compute_color_hist_from_bytes(image_bytes: bytes) -> Optional[np.ndarray]:
+        """Compute quadrant color histograms from image bytes."""
+        import cv2
+        try:
+            arr = np.frombuffer(image_bytes, dtype=np.uint8)
+            img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                return None
+            h, w = img_bgr.shape[:2]
+            if max(h, w) > 256:
+                scale = 256 / max(h, w)
+                img_bgr = cv2.resize(img_bgr, (int(w * scale), int(h * scale)),
+                                     interpolation=cv2.INTER_AREA)
+            hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+            return CNNIndex._compute_quadrant_hist(hsv)
+        except Exception:
+            return None
+
+
+    def query(self, image_bytes: bytes, top_k: int = 10, 
+              country: str = None) -> List[Dict[str, Any]]:
+        """
+        Query the index with an image (BaseIndex interface).
+        """
+        embedding = compute_embedding_from_bytes(image_bytes)
+        if embedding is None:
+            return []
+        
+        color_hist = self._compute_color_hist_from_bytes(image_bytes)
+        
+        # Compute query aspect ratio
+        query_aspect = None
+        try:
+            import io
+            from PIL import Image as PILImage
+            with PILImage.open(io.BytesIO(image_bytes)) as img:
+                w, h = img.size
+                query_aspect = w / h if h > 0 else None
+        except Exception:
+            pass
+        
+        results = self._query_internal(
+            embedding=embedding,
+            top_k=top_k,
+            country=country,
+            color_hist=color_hist,
+            query_aspect=query_aspect,
+        )
+
+        return results

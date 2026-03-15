@@ -8,8 +8,10 @@ where the query is a photo of a catalogue-scan reference.
 
 import cv2
 import numpy as np
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
+
+from matcher.base_index import BaseIndex, IndexRecord
+from config import HSV_BINS_V2, HISTOGRAM_WEIGHTS
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +19,7 @@ from typing import List, Optional, Tuple
 # ---------------------------------------------------------------------------
 
 def compute_features(gray: np.ndarray, color_bgr: np.ndarray = None,
-                     hist_bins: Tuple[int, int, int] = (18, 3, 3)) -> dict:
+                     hist_bins: Tuple[int, int, int] = HSV_BINS_V2) -> dict:
     """
     Compute a compact feature vector for one stamp image.
 
@@ -69,19 +71,7 @@ def hist_similarity(a: np.ndarray, b: np.ndarray) -> float:
 # Index (in-memory, numpy-backed)
 # ---------------------------------------------------------------------------
 
-@dataclass
-class IndexRecord:
-    idx: int
-    image_id: str
-    country: str
-    sw_id: str
-    number: str
-    group_title: str
-    local_image: str
-    detail_url: str
-
-
-class HistogramIndex:
+class HistogramIndex(BaseIndex):
     """Pre-computed feature index for all reference images."""
 
     def __init__(self):
@@ -166,10 +156,11 @@ class HistogramIndex:
 
     # ---- querying --------------------------------------------------------
 
-    def query(self, features: dict, top_k: int = 10,
-              country: str = None,
-              w_hist: float = 0.50, w_ahash: float = 0.20,
-              w_phash: float = 0.30) -> List[dict]:
+    def _query_internal(self, features: dict, top_k: int = 10,
+                        country: str = None,
+                        w_hist: float = HISTOGRAM_WEIGHTS["hist"], 
+                        w_ahash: float = HISTOGRAM_WEIGHTS["ahash"],
+                        w_phash: float = HISTOGRAM_WEIGHTS["phash"]) -> List[dict]:
         """
         Find the top-K most similar reference images.
 
@@ -244,3 +235,43 @@ class HistogramIndex:
                 "good_matches": 0,
             })
         return results
+
+    def query(self, image_bytes: bytes, top_k: int = 10, 
+              country: str = None) -> List[Dict[str, Any]]:
+        """
+        Query the index with an image (BaseIndex interface).
+        
+        Args:
+            image_bytes: Raw image bytes (JPEG/PNG)
+            top_k: Number of matches to return
+            country: Optional country filter
+            
+        Returns:
+            List of match dictionaries
+        """
+        # Decode image bytes
+        arr = np.frombuffer(image_bytes, dtype=np.uint8)
+        try:
+            img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        except Exception:
+            return []
+        if img_bgr is None:
+            return []
+        
+        # Resize if needed
+        h, w = img_bgr.shape[:2]
+        if max(h, w) > 256:
+            scale = 256 / max(h, w)
+            img_bgr = cv2.resize(img_bgr, (int(w * scale), int(h * scale)),
+                                 interpolation=cv2.INTER_AREA)
+        
+        # Convert to grayscale for hash computation
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        
+        # Compute features
+        features = compute_features(gray, color_bgr=img_bgr)
+        
+        # Delegate to internal query method
+        return self._query_internal(features, top_k=top_k, country=country)
+
+

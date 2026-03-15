@@ -5,3 +5,5 @@ output/
 descriptor_index/
 .kiro/
 .vscode/
+venv/
+.venv/

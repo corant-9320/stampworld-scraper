@@ -84,118 +84,353 @@
   <div class="stats" id="header-stats">Loading...</div>
 </header>
 <nav>
-  <button class="active" onclick="showMainTab('overview')">Scraped</button>
-  <button onclick="showMainTab('remaining')">Remaining</button>
-  <button onclick="showMainTab('match')">Match Stamp</button>
+  <button onclick="showMainTab('data')">Data</button>
+  <button class="active" onclick="showMainTab('match')">Match Stamp</button>
 </nav>
 <div class="container">
-  <div id="overview-tab"></div>
-  <div id="remaining-tab" style="display:none"></div>
+  <div id="data-tab"></div>
   <div id="country-tab" style="display:none"></div>
   <div id="match-tab" style="display:none"></div>
 </div>
 <script>
-let overviewData = null;
 let currentCountryStamps = null;
 let currentCountrySlug = null;
 let currentCountryName = null;
-let currentRegion = null;
-let activeMainTab = 'overview';
+let activeMainTab = 'match';
+let dataOverview = null;
 
 async function init() {
-  document.getElementById('overview-tab').innerHTML = '<div class="loading">Loading...</div>';
-  const res = await fetch('/api/overview');
-  overviewData = await res.json();
+  document.getElementById('data-tab').innerHTML = '<div class="loading">Loading...</div>';
+  showMainTab('match');
+}
 
-  // Compute totals
-  let totalStamps = 0, totalImages = 0, totalScraped = 0, totalRemaining = 0;
-  for (const region of Object.values(overviewData)) {
-    totalScraped += region.scraped.length;
-    totalRemaining += region.remaining.length;
-    for (const c of region.scraped) { totalStamps += c.total_stamps; totalImages += c.total_images; }
+async function loadDataTab() {
+  const el = document.getElementById('data-tab');
+  el.innerHTML = '<div class="loading">Loading territory data...</div>';
+  try {
+    const res = await fetch('/api/data-overview');
+    dataOverview = await res.json();
+    renderDataTab();
+  } catch (e) {
+    el.innerHTML = `<div class="loading" style="color:#f44336;">Failed to load: ${e.message}</div>`;
   }
+}
+
+function renderDataTab() {
+  const el = document.getElementById('data-tab');
+  const territories = (dataOverview && dataOverview.territories) || [];
+
+  const totalScraped = territories.reduce((s, t) => s + t.scraped, 0);
+  const totalIndexed = territories.reduce((s, t) => s + t.indexed, 0);
+  const totalAvailable = territories.reduce((s, t) => s + t.available, 0);
   document.getElementById('header-stats').textContent =
-    `${totalScraped} countries · ${totalStamps.toLocaleString()} stamps · ${totalImages.toLocaleString()} images · ${totalRemaining} remaining`;
+    `${territories.length} territories · ${totalScraped.toLocaleString()} scraped · ${totalIndexed.toLocaleString()} indexed · ${totalAvailable.toLocaleString()} available`;
 
-  const regions = Object.keys(overviewData);
-  currentRegion = regions.includes('Europe') ? 'Europe' : regions[0];
-  renderOverview();
-  renderRemaining();
-}
+  let html = `
+    <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
+      <input id="data-search" class="search-bar" style="flex:1;min-width:200px;margin:0;"
+        type="text" placeholder="Search territories..." oninput="filterDataTab(this.value)">
+      <button id="scrape-selected-btn" onclick="scrapeSelected()" style="display:none;background:var(--highlight);border:none;color:#fff;padding:0.5rem 1.2rem;border-radius:4px;cursor:pointer;font-size:0.9rem;">Scrape Selected</button>
+    </div>
+    <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;" id="data-count">${territories.length} territories</div>
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+      <thead>
+        <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--accent);">
+          <th style="padding:0.4rem 0.5rem;width:2rem;">
+            <input type="checkbox" id="select-all-cb" onchange="toggleSelectAll(this.checked)" style="cursor:pointer;">
+          </th>
+          <th style="padding:0.4rem 0.5rem;cursor:pointer;" onclick="sortBy('display_name')">
+            Territory <span id="sort-name" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;cursor:pointer;font-weight:normal;font-size:0.75rem;" onclick="sortBy('region')">
+            Region <span id="sort-region" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;text-align:right;cursor:pointer;" onclick="sortBy('scraped')">
+            Scraped <span id="sort-scraped" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;text-align:right;cursor:pointer;" onclick="sortBy('indexed')">
+            Indexed <span id="sort-indexed" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;text-align:right;cursor:pointer;" onclick="sortBy('available')">
+            Available <span id="sort-available" style="font-size:0.7rem;">↕</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="data-tbody">`;
 
-function regionTabs(activeTab) {
-  const regions = Object.keys(overviewData);
-  return '<div class="region-tabs">' +
-    regions.map(r => `<div class="region-tab ${r === currentRegion ? 'active' : ''}" onclick="switchRegion('${r}','${activeTab}')">${r}</div>`).join('') +
-    '</div>';
-}
-
-function switchRegion(region, tab) {
-  currentRegion = region;
-  if (tab === 'overview') renderOverview();
-  else renderRemaining();
-}
-
-function renderOverview() {
-  const el = document.getElementById('overview-tab');
-  const data = overviewData[currentRegion];
-  let html = regionTabs('overview');
-
-  if (!data.scraped.length) {
-    html += '<div class="loading">No scraped data for this region yet.</div>';
-    el.innerHTML = html;
-    return;
-  }
-
-  html += `<div class="section-title">${data.scraped.length} scraped · ${data.remaining.length} remaining in ${currentRegion}</div>`;
-  html += '<div class="country-grid">';
-  for (const c of data.scraped) {
-    const pct = c.total_stamps > 0 ? Math.round(c.total_images / c.total_stamps * 100) : 0;
-    html += `<div class="country-card scraped" onclick="loadCountry('${c.slug}', '${c.name}')">
-      <h3>${c.name}</h3>
-      <div class="meta">${c.total_stamps.toLocaleString()} stamps · ${c.total_images.toLocaleString()} images</div>
-      <div class="meta">${c.pages_scraped ? c.pages_scraped + ' pages' : ''}</div>
-      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-    </div>`;
-  }
-  html += '</div>';
+  html += renderTerritoryRows(territories);
+  html += `</tbody></table>`;
   el.innerHTML = html;
 }
 
-function renderRemaining() {
-  const el = document.getElementById('remaining-tab');
-  const data = overviewData[currentRegion];
-  let html = regionTabs('remaining');
-  html += `<div class="section-title">${data.remaining.length} countries still to scrape in ${currentRegion}</div>`;
-  html += '<div class="country-grid">';
-  for (const c of data.remaining) {
-    html += `<div class="country-card remaining">
-      <h3>${c.name}</h3>
-      <div class="meta"><a href="${c.sw_url}" target="_blank">View on StampWorld ↗</a></div>
-    </div>`;
+function renderTerritoryRows(territories) {
+  let html = '';
+  for (const t of territories) {
+    const hasData = t.scraped > 0;
+    html += `
+      <tr tabindex="0" style="${hasData ? 'border-left:2px solid #4ade80;' : ''}"
+          onkeydown="rowKeydown(event, this)"
+          onfocus="this.style.outline='1px solid var(--highlight)'"
+          onblur="this.style.outline=''">
+        <td style="padding:0.3rem 0.5rem;text-align:center;">
+          <input type="checkbox" class="territory-cb" data-slug="${t.slug}"
+            onchange="updateScrapeBtn()" style="cursor:pointer;">
+        </td>
+        <td style="padding:0.3rem 0.5rem;">
+          ${hasData
+            ? `<span onclick="loadCountry('${t.slug}','${t.display_name}')" style="cursor:pointer;color:#7aa2f7;">${t.display_name}</span>`
+            : `<span>${t.display_name}</span>`}
+        </td>
+        <td style="padding:0.3rem 0.5rem;font-size:0.75rem;color:var(--muted);">${t.region !== 'Unknown' ? t.region : ''}</td>
+        <td style="padding:0.3rem 0.5rem;text-align:right;">${t.scraped > 0 ? t.scraped.toLocaleString() : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="padding:0.3rem 0.5rem;text-align:right;">${t.indexed > 0 ? t.indexed.toLocaleString() : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="padding:0.3rem 0.5rem;text-align:right;">${t.available > 0 ? t.available.toLocaleString() : '<span style="color:var(--muted)">—</span>'}</td>
+      </tr>`;
   }
-  html += '</div>';
-  el.innerHTML = html;
+  return html;
+}
+
+function filterDataTab(query) {
+  if (!dataOverview) return;
+  const q = query.toLowerCase();
+  const filtered = q
+    ? dataOverview.territories.filter(t =>
+        t.display_name.toLowerCase().includes(q) ||
+        t.region.toLowerCase().includes(q) ||
+        t.slug.toLowerCase().includes(q))
+    : dataOverview.territories;
+  document.getElementById('data-count').textContent = `${filtered.length} territories`;
+  document.getElementById('data-tbody').innerHTML = renderTerritoryRows(filtered);
+}
+
+// Sorting state
+let currentSortField = null;
+let currentSortDirection = 'asc'; // 'asc' or 'desc'
+
+function sortBy(field) {
+  if (!dataOverview) return;
+  
+  // Toggle direction if clicking same field
+  if (currentSortField === field) {
+    currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSortField = field;
+    currentSortDirection = 'asc';
+  }
+  
+  // Sort the territories
+  const sortedTerritories = [...dataOverview.territories].sort((a, b) => {
+    let valA = a[field];
+    let valB = b[field];
+    
+    // Handle numeric fields
+    if (field === 'scraped' || field === 'indexed' || field === 'available') {
+      valA = valA || 0;
+      valB = valB || 0;
+    }
+    
+    // Handle string fields
+    if (typeof valA === 'string') valA = valA.toLowerCase();
+    if (typeof valB === 'string') valB = valB.toLowerCase();
+    
+    // Handle undefined/null values
+    if (valA == null) valA = '';
+    if (valB == null) valB = '';
+    
+    // Compare
+    if (valA < valB) return currentSortDirection === 'asc' ? -1 : 1;
+    if (valA > valB) return currentSortDirection === 'asc' ? 1 : -1;
+    return 0;
+  });
+  
+  // Update sort indicators
+  updateSortIndicators(field, currentSortDirection);
+  
+  // Re-render with sorted data
+  dataOverview.territories = sortedTerritories;
+  document.getElementById('data-tbody').innerHTML = renderTerritoryRows(sortedTerritories);
+}
+
+function updateSortIndicators(field, direction) {
+  // Reset all indicators
+  const indicators = {
+    'display_name': 'sort-name',
+    'region': 'sort-region',
+    'scraped': 'sort-scraped',
+    'indexed': 'sort-indexed',
+    'available': 'sort-available'
+  };
+  
+  for (const [fieldKey, elementId] of Object.entries(indicators)) {
+    const element = document.getElementById(elementId);
+    if (element) {
+      if (fieldKey === field) {
+        element.textContent = direction === 'asc' ? '↑' : '↓';
+        element.style.color = 'var(--highlight)';
+      } else {
+        element.textContent = '↕';
+        element.style.color = '';
+      }
+    }
+  }
+}
+
+function rowKeydown(e, row) {
+  if (e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    const cb = row.querySelector('.territory-cb');
+    if (cb) { cb.checked = !cb.checked; updateScrapeBtn(); }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const next = row.nextElementSibling;
+    if (next) next.focus();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const prev = row.previousElementSibling;
+    if (prev) prev.focus();
+  }
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.territory-cb').forEach(cb => cb.checked = checked);
+  updateScrapeBtn();
+}
+
+function updateScrapeBtn() {
+  const anyChecked = document.querySelectorAll('.territory-cb:checked').length > 0;
+  const btn = document.getElementById('scrape-selected-btn');
+  if (btn) btn.style.display = anyChecked ? '' : 'none';
+}
+
+async function scrapeSelected() {
+  const slugs = Array.from(document.querySelectorAll('.territory-cb:checked')).map(cb => cb.dataset.slug);
+  if (!slugs.length) return;
+
+  const btn = document.getElementById('scrape-selected-btn');
+  btn.disabled = true;
+
+  // Insert progress panel above the table
+  const el = document.getElementById('data-tab');
+  el.insertAdjacentHTML('afterbegin', `
+    <div id="scrape-progress" style="background:var(--card);border-radius:8px;padding:1rem;margin-bottom:1rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <div style="font-size:0.9rem;font-weight:600;">Scraping <span id="sp-current">0</span> / ${slugs.length}</div>
+        <div style="font-size:0.8rem;color:var(--muted);" id="sp-status">Starting...</div>
+      </div>
+      <div class="progress-bar" style="height:6px;margin-bottom:0.75rem;">
+        <div id="sp-bar" class="progress-fill" style="width:0%;background:#7aa2f7;transition:width 0.3s;"></div>
+      </div>
+      <div id="sp-current-territory" style="font-size:0.82rem;color:#7aa2f7;margin-bottom:0.4rem;"></div>
+      <div id="sp-live-count" style="font-size:1.1rem;font-weight:600;margin-bottom:0.5rem;display:none;">
+        <span id="sp-count-num">0</span> <span style="font-size:0.8rem;color:var(--muted);">stamps scraped so far</span>
+      </div>
+      <div id="sp-log" style="font-size:0.78rem;max-height:140px;overflow-y:auto;font-family:monospace;"></div>
+    </div>`);
+
+  const log = document.getElementById('sp-log');
+  const bar = document.getElementById('sp-bar');
+  const spCurrent = document.getElementById('sp-current');
+  const spStatus = document.getElementById('sp-status');
+  const spCurrentTerritory = document.getElementById('sp-current-territory');
+  const spLiveCount = document.getElementById('sp-live-count');
+  const spCountNum = document.getElementById('sp-count-num');
+
+  let ok = 0, errors = 0;
+  let pollInterval = null;
+
+  function startPolling(slug) {
+    spLiveCount.style.display = '';
+    spCurrentTerritory.textContent = `Currently scraping: ${slug}`;
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/scrape-progress/${slug}`);
+        const d = await r.json();
+        spCountNum.textContent = d.count.toLocaleString();
+      } catch {}
+    }, 2000);
+  }
+
+  function stopPolling() {
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    spCurrentTerritory.textContent = '';
+    spLiveCount.style.display = 'none';
+  }
+
+  try {
+    const res = await fetch('/api/scrape', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slugs})
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const evt = JSON.parse(line);
+          if (evt.done) {
+            stopPolling();
+            spStatus.textContent = `Done — ${ok} succeeded, ${errors} failed`;
+            bar.style.width = '100%';
+            bar.style.background = errors > 0 ? '#f87171' : '#4ade80';
+            btn.disabled = false;
+            btn.textContent = 'Scrape Selected';
+            await loadDataTab();
+            return;
+          }
+          const pct = Math.round((evt.index + 1) / evt.total * 100);
+          bar.style.width = pct + '%';
+          spCurrent.textContent = evt.index + 1;
+          spStatus.textContent = evt.message;
+
+          if (evt.status === 'running') {
+            stopPolling();
+            startPolling(evt.slug);
+          } else {
+            stopPolling();
+            const color = evt.status === 'success' ? '#4ade80' : '#f87171';
+            const icon = evt.status === 'success' ? '✓' : '✗';
+            log.insertAdjacentHTML('beforeend',
+              `<div style="color:${color};padding:1px 0;">${icon} ${evt.message}</div>`);
+            log.scrollTop = log.scrollHeight;
+            if (evt.status === 'success') ok++;
+            if (evt.status === 'error') errors++;
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    stopPolling();
+    spStatus.textContent = `Failed: ${e.message}`;
+    btn.disabled = false;
+    btn.textContent = 'Scrape Selected';
+  }
 }
 
 function showMainTab(tab) {
   activeMainTab = tab;
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById('overview-tab').style.display = 'none';
-  document.getElementById('remaining-tab').style.display = 'none';
+  document.getElementById('data-tab').style.display = 'none';
   document.getElementById('country-tab').style.display = 'none';
   document.getElementById('match-tab').style.display = 'none';
-  if (tab === 'overview') {
-    document.getElementById('overview-tab').style.display = '';
+  if (tab === 'data') {
+    document.getElementById('data-tab').style.display = '';
     document.querySelectorAll('nav button')[0].classList.add('active');
-  } else if (tab === 'remaining') {
-    document.getElementById('remaining-tab').style.display = '';
-    document.querySelectorAll('nav button')[1].classList.add('active');
   } else if (tab === 'country') {
     document.getElementById('country-tab').style.display = '';
   } else if (tab === 'match') {
     document.getElementById('match-tab').style.display = '';
-    document.querySelectorAll('nav button')[2].classList.add('active');
+    document.querySelectorAll('nav button')[1].classList.add('active');
     loadMatchTab();
   }
 }
@@ -211,7 +446,7 @@ async function loadCountry(slug, name) {
   currentCountryName = name;
   const meta = data.metadata || {};
 
-  let html = `<button class="back-btn" onclick="showMainTab('overview')">← Back</button>`;
+  let html = `<button class="back-btn" onclick="showMainTab('data')">← Back</button>`;
   html += `<div class="country-header"><h2>${name}</h2>`;
   html += `<div class="info">${currentCountryStamps.length.toLocaleString()} stamps`;
   if (meta.total_pages) html += ` · ${meta.total_pages} pages`;
@@ -510,7 +745,6 @@ function renderMatchUI() {
         <div style="font-size: 0.85rem; color: var(--muted);" id="match-results-info"></div>
         <button id="match-clear-btn" style="background: none; border: 1px solid var(--accent); color: var(--muted); padding: 0.3rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem;">Clear Results</button>
       </div>
-      <div id="match-ocr-panel" style="display:none"></div>
       <div id="match-results-grid" class="stamp-grid"></div>
     </div>
     
@@ -671,21 +905,7 @@ function setupMatchEventListeners() {
       resultsInfo.textContent = 'No matches found';
       resultsGrid.innerHTML = '<div class="loading">No matching stamps found</div>';
     } else {
-      const ocrText = data.ocr_text || '';
-      const detectedCountry = matches[0]?.detected_country || '';
-      
-      let infoHtml = `${matches.length} match${matches.length === 1 ? '' : 'es'} found · ${elapsedMs}ms`;
-      resultsInfo.innerHTML = infoHtml;
-
-      
-      // Build results: uploaded image pinned on left + match cards
-      let ocrInfoHtml = '';
-      if (ocrText) {
-        ocrInfoHtml += `<div style="font-size: 0.72rem; margin-top: 0.3rem;"><span style="color: var(--muted);">OCR:</span> <span style="color: #a78bfa;">${ocrText}</span></div>`;
-      }
-      if (detectedCountry) {
-        ocrInfoHtml += `<div style="font-size: 0.72rem; margin-top: 0.15rem;"><span style="color: var(--muted);">Country:</span> <span style="color: #34d399;">${detectedCountry}</span></div>`;
-      }
+      resultsInfo.innerHTML = `${matches.length} match${matches.length === 1 ? '' : 'es'} found · ${elapsedMs}ms`;
 
       let gridHtml = `
         <div class="stamp-card" style="border: 2px solid var(--highlight); position: relative;">
@@ -694,7 +914,7 @@ function setupMatchEventListeners() {
           <div class="info">
             <h4 style="font-size: 0.85rem;">Uploaded image</h4>
             <div style="font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem;">${fileInfo.textContent}</div>
-            ${ocrInfoHtml}
+            <details style="margin-top:0.4rem;"><summary style="font-size:0.65rem;color:var(--muted);cursor:pointer;">Raw data</summary><pre style="font-size:0.6rem;color:#8be9fd;background:var(--bg);padding:0.4rem;border-radius:4px;overflow-x:auto;white-space:pre-wrap;max-height:200px;overflow-y:auto;">${JSON.stringify({elapsed_ms: elapsedMs, total_matches: matches.length}, null, 2)}</pre></details>
           </div>
         </div>
       `;
@@ -730,9 +950,11 @@ function setupMatchEventListeners() {
         // Score breakdown mini-bars
         const scores = [
           ['CNN',     match.score_cnn,     '#60a5fa'],
-          ['Colour',  match.score_color,   '#f59e0b'],
-          ['Text',    match.score_text,    '#a78bfa'],
-          ['Country', match.score_country, '#34d399'],
+          ['Col TL',  match.score_color_tl, '#f59e0b'],
+          ['Col TR',  match.score_color_tr, '#f59e0b'],
+          ['Col BL',  match.score_color_bl, '#f59e0b'],
+          ['Col BR',  match.score_color_br, '#f59e0b'],
+          ['Aspect',  match.score_aspect,  '#fb7185'],
         ];
         let scoreBars = '<div style="margin-top: 0.4rem;">';
         for (const [label, val, color] of scores) {
@@ -763,16 +985,13 @@ function setupMatchEventListeners() {
               ${scoreBars}
               <div class="group-title" style="white-space: normal;">${match.group_title}</div>
               ${metaHtml ? `<table class="attr-table" style="margin-top: 0.4rem;">${metaHtml}</table>` : ''}
+              <details style="margin-top:0.4rem;"><summary style="font-size:0.65rem;color:var(--muted);cursor:pointer;">Raw data</summary><pre style="font-size:0.6rem;color:#8be9fd;background:var(--bg);padding:0.4rem;border-radius:4px;overflow-x:auto;white-space:pre-wrap;max-height:200px;overflow-y:auto;">${JSON.stringify(match, null, 2)}</pre></details>
             </div>
           </div>
         `;
       }
       
       resultsGrid.innerHTML = gridHtml;
-
-      // OCR info is now shown under the uploaded image card, hide the old panel
-      const ocrPanel = document.getElementById('match-ocr-panel');
-      ocrPanel.style.display = 'none';
     }
     
     results.style.display = 'block';

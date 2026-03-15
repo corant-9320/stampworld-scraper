@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stamp Scraper Viewer</title>
+<style>
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --highlight: #e94560; --text: #eee; --muted: #888; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+  header { background: var(--accent); padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.4rem; font-weight: 600; }
+  header .stats { margin-left: auto; font-size: 0.85rem; color: #aac; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem; }
+
+  .search-bar { width: 100%; padding: 0.6rem 1rem; background: var(--card); border: 1px solid var(--accent); border-radius: 6px; color: var(--text); font-size: 0.9rem; margin-bottom: 1rem; }
+  .search-bar::placeholder { color: var(--muted); }
+  .search-bar:focus { outline: none; border-color: var(--highlight); }
+
+  .back-btn { background: var(--accent); border: none; color: var(--text); padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; margin-bottom: 1rem; font-size: 0.9rem; }
+  .back-btn:hover { background: var(--highlight); }
+  .country-header { margin-bottom: 1.5rem; }
+  .country-header h2 { font-size: 1.5rem; }
+  .country-header .info { font-size: 0.85rem; color: var(--muted); margin-top: 0.3rem; }
+  .result-count { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
+
+  .stamp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+  .stamp-card { background: var(--card); border-radius: 8px; overflow: hidden; transition: transform 0.15s; }
+  .stamp-card:hover { transform: translateY(-2px); }
+  .stamp-card img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; padding: 8px; }
+  .stamp-card .no-img { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #2a2a3e; color: var(--muted); font-size: 0.8rem; }
+  .stamp-card .info { padding: 0.6rem; }
+  .stamp-card .info h4 { font-size: 0.85rem; margin-bottom: 0.2rem; }
+  .stamp-card .info p { font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+
+  .group-header { font-size: 0.85rem; font-weight: 600; color: #7aa2f7; padding: 0.6rem 0 0.4rem; margin: 1.5rem 0 0.75rem; border-bottom: 1px solid var(--accent); display: flex; align-items: center; justify-content: space-between; }
+  .rescrape-btn { font-size: 0.72rem; padding: 0.2rem 0.6rem; background: #1a1b2e; border: 1px solid var(--accent); color: #7aa2f7; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .rescrape-btn:hover { background: var(--accent); color: #fff; }
+  .rescrape-btn:disabled { opacity: 0.5; cursor: wait; }
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; padding: 0.7rem 1.2rem; border-radius: 6px; font-size: 0.85rem; z-index: 9999; display: none; }
+  .toast.info { background: #1a1b2e; border: 1px solid #7aa2f7; color: #7aa2f7; }
+  .toast.ok   { background: #1a2e1a; border: 1px solid #4caf50; color: #4caf50; }
+  .toast.err  { background: #2e1a1a; border: 1px solid #f44336; color: #f44336; }
+  .attr-table { width: 100%; border-collapse: collapse; margin-top: 0.3rem; }
+  .attr-table td { font-size: 0.72rem; padding: 0.1rem 0; vertical-align: top; }
+  .attr-label { color: var(--muted); width: 52%; padding-right: 0.3rem; }
+  .attr-val { color: var(--text); }
+
+  .loading { text-align: center; padding: 3rem; color: var(--muted); }
+  .progress-bar { height: 4px; background: var(--card); border-radius: 2px; margin-top: 0.4rem; }
+  .progress-fill { height: 100%; background: #4ade80; border-radius: 2px; transition: width 0.3s; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📦 Stamp Scraper</h1>
+  <div class="stats" id="header-stats">Loading...</div>
+</header>
+<div class="container">
+  <div id="data-tab"></div>
+  <div id="country-tab" style="display:none"></div>
+</div>
+<script>
+let currentCountryStamps = null;
+let currentCountrySlug = null;
+let currentCountryName = null;
+let dataOverview = null;
+
+async function init() {
+  document.getElementById('data-tab').innerHTML = '<div class="loading">Loading...</div>';
+  await loadDataTab();
+}
+
+async function loadDataTab() {
+  const el = document.getElementById('data-tab');
+  el.innerHTML = '<div class="loading">Loading territory data...</div>';
+  try {
+    const res = await fetch('/api/data-overview');
+    dataOverview = await res.json();
+    renderDataTab();
+  } catch (e) {
+    el.innerHTML = `<div class="loading" style="color:#f44336;">Failed to load: ${e.message}</div>`;
+  }
+}
+
+function renderDataTab() {
+  const el = document.getElementById('data-tab');
+  const territories = (dataOverview && dataOverview.territories) || [];
+
+  const totalScraped = territories.reduce((s, t) => s + t.scraped, 0);
+  const totalAvailable = territories.reduce((s, t) => s + t.available, 0);
+  document.getElementById('header-stats').textContent =
+    `${territories.length} territories · ${totalScraped.toLocaleString()} scraped · ${totalAvailable.toLocaleString()} available`;
+
+  let html = `
+    <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
+      <input id="data-search" class="search-bar" style="flex:1;min-width:200px;margin:0;"
+        type="text" placeholder="Search territories..." oninput="filterDataTab(this.value)">
+      <button id="scrape-selected-btn" onclick="scrapeSelected()" style="display:none;background:var(--highlight);border:none;color:#fff;padding:0.5rem 1.2rem;border-radius:4px;cursor:pointer;font-size:0.9rem;">Scrape Selected</button>
+    </div>
+    <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;" id="data-count">${territories.length} territories</div>
+    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+      <thead>
+        <tr style="color:var(--muted);text-align:left;border-bottom:1px solid var(--accent);">
+          <th style="padding:0.4rem 0.5rem;width:2rem;">
+            <input type="checkbox" id="select-all-cb" onchange="toggleSelectAll(this.checked)" style="cursor:pointer;">
+          </th>
+          <th style="padding:0.4rem 0.5rem;cursor:pointer;" onclick="sortBy('display_name')">
+            Territory <span id="sort-name" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;cursor:pointer;font-weight:normal;font-size:0.75rem;" onclick="sortBy('region')">
+            Region <span id="sort-region" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;text-align:right;cursor:pointer;" onclick="sortBy('scraped')">
+            Scraped <span id="sort-scraped" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;text-align:right;cursor:pointer;" onclick="sortBy('available')">
+            Available <span id="sort-available" style="font-size:0.7rem;">↕</span>
+          </th>
+          <th style="padding:0.4rem 0.5rem;text-align:right;cursor:pointer;" onclick="sortBy('delta')">
+            Delta <span id="sort-delta" style="font-size:0.7rem;">↕</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="data-tbody">`;
+
+  html += renderTerritoryRows(territories);
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+
+function renderTerritoryRows(territories) {
+  let html = '';
+  for (const t of territories) {
+    const hasData = t.scraped > 0;
+    html += `
+      <tr tabindex="0" style="${hasData ? 'border-left:2px solid #4ade80;' : ''}"
+          onkeydown="rowKeydown(event, this)"
+          onfocus="this.style.outline='1px solid var(--highlight)'"
+          onblur="this.style.outline=''">
+        <td style="padding:0.3rem 0.5rem;text-align:center;">
+          <input type="checkbox" class="territory-cb" data-slug="${t.slug}"
+            onchange="updateScrapeBtn()" style="cursor:pointer;">
+        </td>
+        <td style="padding:0.3rem 0.5rem;">
+          ${hasData
+            ? `<span onclick="loadCountry('${t.slug}','${t.display_name}')" style="cursor:pointer;color:#7aa2f7;">${t.display_name}</span>`
+            : `<span>${t.display_name}</span>`}
+        </td>
+        <td style="padding:0.3rem 0.5rem;font-size:0.75rem;color:var(--muted);">${t.region !== 'Unknown' ? t.region : ''}</td>
+        <td style="padding:0.3rem 0.5rem;text-align:right;">${t.scraped > 0 ? t.scraped.toLocaleString() : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="padding:0.3rem 0.5rem;text-align:right;">${t.available > 0 ? t.available.toLocaleString() : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="padding:0.3rem 0.5rem;text-align:right;">${(() => { const d = t.available - t.scraped; return d > 0 ? `<span style="color:#f87171;">${d.toLocaleString()}</span>` : d === 0 && t.scraped > 0 ? '<span style="color:#4ade80;">✓</span>' : '<span style="color:var(--muted)">—</span>'; })()}</td>
+      </tr>`;
+  }
+  return html;
+}
+
+function filterDataTab(query) {
+  if (!dataOverview) return;
+  const q = query.toLowerCase();
+  const filtered = q
+    ? dataOverview.territories.filter(t =>
+        t.display_name.toLowerCase().includes(q) ||
+        t.region.toLowerCase().includes(q) ||
+        t.slug.toLowerCase().includes(q))
+    : dataOverview.territories;
+  document.getElementById('data-count').textContent = `${filtered.length} territories`;
+  document.getElementById('data-tbody').innerHTML = renderTerritoryRows(filtered);
+}
+
+let currentSortField = null;
+let currentSortDirection = 'asc';
+
+function sortBy(field) {
+  if (!dataOverview) return;
+  if (currentSortField === field) {
+    currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSortField = field;
+    currentSortDirection = 'asc';
+  }
+  const sortedTerritories = [...dataOverview.territories].sort((a, b) => {
+    let valA = field === 'delta' ? (a.available - a.scraped) : a[field];
+    let valB = field === 'delta' ? (b.available - b.scraped) : b[field];
+    if (['scraped', 'available', 'delta'].includes(field)) { valA = valA || 0; valB = valB || 0; }
+    if (typeof valA === 'string') valA = valA.toLowerCase();
+    if (typeof valB === 'string') valB = valB.toLowerCase();
+    if (valA == null) valA = '';
+    if (valB == null) valB = '';
+    if (valA < valB) return currentSortDirection === 'asc' ? -1 : 1;
+    if (valA > valB) return currentSortDirection === 'asc' ? 1 : -1;
+    return 0;
+  });
+  updateSortIndicators(field, currentSortDirection);
+  dataOverview.territories = sortedTerritories;
+  document.getElementById('data-tbody').innerHTML = renderTerritoryRows(sortedTerritories);
+}
+
+function updateSortIndicators(field, direction) {
+  const indicators = { 'display_name': 'sort-name', 'region': 'sort-region', 'scraped': 'sort-scraped', 'available': 'sort-available', 'delta': 'sort-delta' };
+  for (const [fieldKey, elementId] of Object.entries(indicators)) {
+    const element = document.getElementById(elementId);
+    if (element) {
+      if (fieldKey === field) { element.textContent = direction === 'asc' ? '↑' : '↓'; element.style.color = 'var(--highlight)'; }
+      else { element.textContent = '↕'; element.style.color = ''; }
+    }
+  }
+}
+
+function rowKeydown(e, row) {
+  if (e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    const cb = row.querySelector('.territory-cb');
+    if (cb) { cb.checked = !cb.checked; updateScrapeBtn(); }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const next = row.nextElementSibling;
+    if (next) next.focus();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const prev = row.previousElementSibling;
+    if (prev) prev.focus();
+  }
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.territory-cb').forEach(cb => cb.checked = checked);
+  updateScrapeBtn();
+}
+
+function updateScrapeBtn() {
+  const anyChecked = document.querySelectorAll('.territory-cb:checked').length > 0;
+  const btn = document.getElementById('scrape-selected-btn');
+  if (btn) btn.style.display = anyChecked ? '' : 'none';
+}
+
+async function scrapeSelected() {
+  const slugs = Array.from(document.querySelectorAll('.territory-cb:checked')).map(cb => cb.dataset.slug);
+  if (!slugs.length) return;
+
+  const btn = document.getElementById('scrape-selected-btn');
+  btn.disabled = true;
+
+  const el = document.getElementById('data-tab');
+  el.insertAdjacentHTML('afterbegin', `
+    <div id="scrape-progress" style="background:var(--card);border-radius:8px;padding:1rem;margin-bottom:1rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <div style="font-size:0.9rem;font-weight:600;">Scraping <span id="sp-current">0</span> / ${slugs.length}</div>
+        <div style="font-size:0.8rem;color:var(--muted);" id="sp-status">Starting...</div>
+      </div>
+      <div class="progress-bar" style="height:6px;margin-bottom:0.75rem;">
+        <div id="sp-bar" class="progress-fill" style="width:0%;background:#7aa2f7;transition:width 0.3s;"></div>
+      </div>
+      <div id="sp-current-territory" style="font-size:0.82rem;color:#7aa2f7;margin-bottom:0.4rem;"></div>
+      <div id="sp-live-count" style="font-size:1.1rem;font-weight:600;margin-bottom:0.5rem;display:none;">
+        <span id="sp-count-num">0</span> <span style="font-size:0.8rem;color:var(--muted);">stamps scraped so far</span>
+      </div>
+      <div id="sp-log" style="font-size:0.78rem;max-height:140px;overflow-y:auto;font-family:monospace;"></div>
+    </div>`);
+
+  const log = document.getElementById('sp-log');
+  const bar = document.getElementById('sp-bar');
+  const spCurrent = document.getElementById('sp-current');
+  const spStatus = document.getElementById('sp-status');
+  const spCurrentTerritory = document.getElementById('sp-current-territory');
+  const spLiveCount = document.getElementById('sp-live-count');
+  const spCountNum = document.getElementById('sp-count-num');
+
+  let ok = 0, errors = 0;
+  let pollInterval = null;
+
+  function startPolling(slug) {
+    spLiveCount.style.display = '';
+    spCurrentTerritory.textContent = `Currently scraping: ${slug}`;
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/scrape-progress/${slug}`);
+        const d = await r.json();
+        spCountNum.textContent = d.count.toLocaleString();
+      } catch {}
+    }, 2000);
+  }
+
+  function stopPolling() {
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    spCurrentTerritory.textContent = '';
+    spLiveCount.style.display = 'none';
+  }
+
+  try {
+    const res = await fetch('/api/scrape', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slugs})
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const evt = JSON.parse(line);
+          if (evt.done) {
+            stopPolling();
+            spStatus.textContent = `Done — ${ok} succeeded, ${errors} failed`;
+            bar.style.width = '100%';
+            bar.style.background = errors > 0 ? '#f87171' : '#4ade80';
+            btn.disabled = false;
+            btn.textContent = 'Scrape Selected';
+            await loadDataTab();
+            return;
+          }
+          const pct = Math.round((evt.index + 1) / evt.total * 100);
+          bar.style.width = pct + '%';
+          spCurrent.textContent = evt.index + 1;
+          spStatus.textContent = evt.message;
+
+          if (evt.status === 'running') {
+            stopPolling();
+            startPolling(evt.slug);
+          } else {
+            stopPolling();
+            const color = evt.status === 'success' ? '#4ade80' : '#f87171';
+            const icon = evt.status === 'success' ? '✓' : '✗';
+            log.insertAdjacentHTML('beforeend',
+              `<div style="color:${color};padding:1px 0;">${icon} ${evt.message}</div>`);
+            log.scrollTop = log.scrollHeight;
+            if (evt.status === 'success') ok++;
+            if (evt.status === 'error') errors++;
+          }
+        } catch {}
+      }
+    }
+  } catch (e) {
+    stopPolling();
+    spStatus.textContent = `Failed: ${e.message}`;
+    btn.disabled = false;
+    btn.textContent = 'Scrape Selected';
+  }
+}
+
+function showDataTab() {
+  document.getElementById('data-tab').style.display = '';
+  document.getElementById('country-tab').style.display = 'none';
+}
+
+async function loadCountry(slug, name) {
+  document.getElementById('data-tab').style.display = 'none';
+  document.getElementById('country-tab').style.display = '';
+  const el = document.getElementById('country-tab');
+  el.innerHTML = '<div class="loading">Loading ' + name + '...</div>';
+  const res = await fetch('/api/country/' + slug);
+  const data = await res.json();
+  currentCountryStamps = data.stamps || [];
+  currentCountrySlug = slug;
+  currentCountryName = name;
+  const meta = data.metadata || {};
+
+  let html = `<button class="back-btn" onclick="showDataTab()">← Back</button>`;
+  html += `<div class="country-header"><h2>${name}</h2>`;
+  html += `<div class="info">${currentCountryStamps.length.toLocaleString()} stamps`;
+  if (meta.total_pages) html += ` · ${meta.total_pages} pages`;
+  if (meta.scraped_at) html += ` · scraped ${new Date(meta.scraped_at).toLocaleDateString()}`;
+  html += `</div></div>`;
+  html += `<input class="search-bar" type="text" placeholder="Search by number, type, colour, denomination, group title..." oninput="filterStamps(this.value)">`;
+  html += `<div id="result-count" class="result-count">${currentCountryStamps.length.toLocaleString()} stamps</div>`;
+  html += `<div id="stamp-groups">`;
+  html += renderStampGroups(currentCountryStamps);
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+const STAMP_FIELDS = [
+  ['denomination', 'Denom.'], ['catalogue_type', 'Type'], ['colour', 'Colour'],
+  ['perforations', 'Perf.'], ['watermark', 'Watermark'], ['paper', 'Paper'],
+  ['quantity', 'Qty'], ['price_mint_nh', 'Mint NH'], ['price_unused', 'Unused'],
+  ['price_used', 'Used'], ['price_on_cover', 'On Cover'], ['currency', 'Currency'],
+];
+
+function renderStampGroups(stamps) {
+  const typeFallback = {}, groupFallback = {};
+  for (const s of currentCountryStamps) {
+    if (!s.local_image || !s.group_id) continue;
+    if (!groupFallback[s.group_id]) groupFallback[s.group_id] = s.local_image;
+    const type = s.type || '';
+    if (type) {
+      if (!typeFallback[s.group_id]) typeFallback[s.group_id] = {};
+      if (!typeFallback[s.group_id][type]) typeFallback[s.group_id][type] = s.local_image;
+    }
+  }
+
+  function getFallbackImage(s) {
+    if (s.local_image) return { img: s.local_image, isFallback: false };
+    if (!s.group_id) return { img: null, isFallback: false };
+    const gid = s.group_id;
+    const type = s.type || '';
+    if (type && typeFallback[gid]) {
+      const m = type.match(/^(.*?)(\d+)$/);
+      if (m) {
+        const prefix = m[1];
+        let num = parseInt(m[2], 10);
+        while (num > 0) {
+          num--;
+          const candidate = num === 0 ? prefix : prefix + num;
+          if (typeFallback[gid][candidate]) return { img: typeFallback[gid][candidate], isFallback: true };
+        }
+      }
+    }
+    return { img: groupFallback[gid] || null, isFallback: !!groupFallback[gid] };
+  }
+
+  const groups = [];
+  const groupMap = new Map();
+  for (const s of stamps) {
+    const key = s.group_title || s.group_id || '';
+    if (!groupMap.has(key)) { groupMap.set(key, []); groups.push(key); }
+    groupMap.get(key).push(s);
+  }
+
+  let html = '';
+  for (const key of groups) {
+    const groupStamps = groupMap.get(key);
+    const gid = groupStamps[0]?.group_id || '';
+    const country = groupStamps[0]?.country || '';
+    if (key) {
+      html += `<div class="group-header" id="group-${gid}">
+        ${key}
+        <button class="rescrape-btn" onclick="rescrapeGroup('${country}','${gid}',this)" title="Re-scrape this group">↺ Rescrape</button>
+      </div>`;
+    }
+    html += '<div class="stamp-grid">';
+    for (const s of groupStamps) {
+      const { img: localImg, isFallback } = getFallbackImage(s);
+      const imgSrc = localImg ? '/images/' + localImg.replace(/\\/g, '/').replace('stamp_images/', '') : '';
+      const img = imgSrc
+        ? `<img src="${imgSrc}" alt="Stamp ${s.number}" loading="lazy" ${isFallback ? 'style="opacity:0.5"' : ''}>`
+        : `<div class="no-img">No image</div>`;
+      let attrs = '';
+      for (const [field, label] of STAMP_FIELDS) {
+        const val = s[field];
+        if (val && val !== '-') attrs += `<tr><td class="attr-label">${label}</td><td class="attr-val">${val}</td></tr>`;
+      }
+      html += `<div class="stamp-card">${img}<div class="info"><h4>#${s.number || '?'} &nbsp;·&nbsp; ${s.type || ''}</h4>${attrs ? `<table class="attr-table">${attrs}</table>` : ''}</div></div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+async function rescrapeGroup(country, groupId, btn) {
+  btn.disabled = true;
+  btn.textContent = '↺ Scraping...';
+  showToast(`Rescraping group ${groupId}…`, 'info');
+  try {
+    const res = await fetch('/api/rescrape-group', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({country, group_id: groupId})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`Group ${groupId} rescrape done. Reloading…`, 'ok');
+      setTimeout(() => {
+        loadCountry(currentCountrySlug, currentCountryName).then(() => {
+          const el = document.getElementById('group-' + groupId);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }, 1500);
+    } else {
+      showToast(`Error: ${data.error}`, 'err');
+      btn.disabled = false;
+      btn.textContent = '↺ Rescrape';
+    }
+  } catch (e) {
+    showToast(`Request failed: ${e}`, 'err');
+    btn.disabled = false;
+    btn.textContent = '↺ Rescrape';
+  }
+}
+
+function showToast(msg, type) {
+  let toast = document.getElementById('toast');
+  if (!toast) { toast = document.createElement('div'); toast.id = 'toast'; document.body.appendChild(toast); }
+  toast.textContent = msg;
+  toast.className = 'toast ' + type;
+  toast.style.display = 'block';
+  clearTimeout(toast._t);
+  if (type !== 'info') toast._t = setTimeout(() => toast.style.display = 'none', 4000);
+}
+
+function filterStamps(query) {
+  if (!currentCountryStamps) return;
+  const q = query.toLowerCase();
+  const filtered = q ? currentCountryStamps.filter(s =>
+    (s.number || '').toLowerCase().includes(q) ||
+    (s.type || '').toLowerCase().includes(q) ||
+    (s.colour || '').toLowerCase().includes(q) ||
+    (s.denomination || '').toLowerCase().includes(q) ||
+    (s.watermark || '').toLowerCase().includes(q) ||
+    (s.group_title || '').toLowerCase().includes(q)
+  ) : currentCountryStamps;
+  document.getElementById('result-count').textContent = filtered.length.toLocaleString() + ' stamps';
+  document.getElementById('stamp-groups').innerHTML = renderStampGroups(filtered);
+}
+
+init();
+</script>
+</body>
+</html>

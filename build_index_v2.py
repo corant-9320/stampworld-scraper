@@ -11,8 +11,6 @@ Usage:
 """
 
 import argparse
-import glob
-import json
 import os
 import sys
 
@@ -22,6 +20,7 @@ import numpy as np
 from matcher.histogram_matcher import (
     compute_features, HistogramIndex, IndexRecord,
 )
+from matcher.index_builder import load_stamps
 
 
 def main():
@@ -31,21 +30,10 @@ def main():
     parser.add_argument("--country", default=None)
     args = parser.parse_args()
 
-    # Load stamp records
-    all_stamps = []
-    for jp in glob.glob(os.path.join(args.output_dir, "stamps_*.json")):
-        with open(jp, encoding="utf-8") as f:
-            data = json.load(f)
-        stamps = data.get("stamps", [])
-        print(f"  {os.path.basename(jp)}: {len(stamps)} stamps")
-        all_stamps.extend(stamps)
-
-    if args.country:
-        all_stamps = [s for s in all_stamps
-                      if s.get("country", "").lower() == args.country.lower()]
-        print(f"Filtered to {len(all_stamps)} stamps for {args.country}")
-
-    if not all_stamps:
+    # Load stamp records using shared function
+    valid_stamps = load_stamps(args.output_dir, country_filter=args.country)
+    
+    if not valid_stamps:
         print("No stamps found!")
         return
 
@@ -53,19 +41,9 @@ def main():
     processed = 0
     skipped = 0
 
-    for i, stamp in enumerate(all_stamps):
+    for i, (stamp, img_path) in enumerate(valid_stamps):
         if (i + 1) % 200 == 0:
-            print(f"  {i+1}/{len(all_stamps)} ...")
-
-        local_image = stamp.get("local_image", "")
-        if not local_image:
-            skipped += 1
-            continue
-
-        img_path = local_image.replace("\\", "/")
-        if not os.path.exists(img_path):
-            skipped += 1
-            continue
+            print(f"  {i+1}/{len(valid_stamps)} ...")
 
         try:
             img_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
